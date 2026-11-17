@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f6f5f1">
+<title>Пара — мой кампус</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#content">К содержимому</a>
+<div class="shell">
+  <aside class="sidebar">
+    <a href="#today" class="brand" data-tab="today" aria-label="Пара, на главную"><span class="brand-logo" aria-hidden="true"><i></i><i></i><i></i></span><span>пара<span class="brand-dot">.</span></span></a>
+    <div class="rail-rule"></div>
+    <nav id="desktop-nav" aria-label="Основная навигация"></nav>
+    <div class="rail-bottom"><button type="button" class="profile-mini" data-tab="profile" id="rail-user"></button></div>
+  </aside>
+  <div class="stage">
+    <header class="top"><div class="top-inner"><a href="#today" class="brand mobile-brand" data-tab="today" aria-label="Пара, на главную"><span class="brand-logo" aria-hidden="true"><i></i><i></i><i></i></span><span>пара<span class="brand-dot">.</span></span></a><div class="crumb"><span class="crumb-dot"></span>Мой кампус <b>/</b> <strong id="crumb">Сегодня</strong></div><div class="top-right"><span id="mode"></span><button class="avatar" id="avatar" data-tab="profile" aria-label="Открыть профиль" type="button">П</button></div></div></header>
+    <main id="content" tabindex="-1"><div class="skeleton"><span class="dot-loader"></span> Открываем кампус…</div></main>
+  </div>
+</div>
+<nav id="mobile-nav" class="bottom-nav" aria-label="Навигация Mini App"></nav>
+<dialog id="dialog"><div class="dialog-content"></div></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
