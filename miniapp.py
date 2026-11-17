@@ -51,7 +51,10 @@ def state(bot):
                 "telegram":s.get("telegram_status",{"ok":False,"detail":"Ещё не проверено"})}
     for key in ("mail","isu"):
         statuses[key]=s.get(key+"_status",{"ok":False,"detail":"Ожидает подключения"})
-    return dict(today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
+    if bot.mail.signing_in:
+        statuses["isu"] = {"ok":False, "detail":"Ожидаю входа в окне Chromium"}
+    pending = bot.check_job is not None and not bot.check_job.done()
+    return dict(check_pending=pending, today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
                 settings={k:s.get(k,v) for k,v in DEFAULTS.items()},services=statuses,
                 days=[dict(date=d,lessons=item["lessons"],checked=item["checked"],stale=bool(s.get("source_error") or d not in s.get("latest_dates",[]) or item["checked"][:10]!=now.date().isoformat())) for d,item in sorted(s.get("cache",{}).items()) if d>=now.date().isoformat()],
                 tasks=tasks,categories=[r[0] for r in s.db.execute("SELECT name FROM categories ORDER BY name")],
@@ -149,7 +152,9 @@ async def action(bot, kind, data):
             save_settings(s,data)
     elif kind in ("itmo_login","isu_login"):
         notice=bot.begin_login(kind=="isu_login")
-    elif kind in ("mail_check","check_services","refresh"):
+    elif kind == "check_services":
+        notice = bot.start_check()
+    elif kind in ("mail_check","refresh"):
         if kind!="mail_check":
             if s.get("connected") and not bot.monitor.signing_in:
                 await bot.monitor.fetch()
@@ -157,8 +162,6 @@ async def action(bot, kind, data):
                 notice="Для загрузки расписания войди в ИТМО ID."
         if kind!="refresh":
             await bot.mail.sync()
-        if kind=="check_services":
-            await bot.check_telegram()
         if kind=="mail_check" and not (s.get("isu_connected") or bot.mail.imap.host):
             notice="Подключи входящие ИСУ или заполни настройки почты в .env."
     elif kind=="week_report":

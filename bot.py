@@ -19,7 +19,8 @@ from dotenv import load_dotenv
 from extras import draft_task, weekly_report
 from inbox import IsuInbox
 from mailbox_sync import Mail
-from miniapp import start_web
+from miniapp import start_web, state
+from menu import serve_menu
 from planner import FROM_TEXT, MAIL, WEEK
 
 ROOT = Path(__file__).resolve().parent
@@ -70,6 +71,8 @@ class Bot:
         self.isu = IsuInbox(ROOT/"data"/"isu-browser")
         self.mail = Mail(store,self.isu)
         self.isu_job = None
+        self.check_job = None
+        self.report_check = False
         self.api = None
         self.login_job = None
         self.pair_code = secrets.token_urlsafe(8)
@@ -94,6 +97,7 @@ class Bot:
     def begin_login(self, isu=False):
         if isu:
             if not self.isu_job or self.isu_job.done():
+                self.mail.signing_in = True
                 self.isu_job=asyncio.create_task(self.sign_into_inbox())
             return "В окне Chromium на компьютере с ботом войди в ИСУ и открой «Сообщения → Входящие»."
         if not self.login_job or self.login_job.done():
@@ -105,18 +109,43 @@ class Bot:
             await self.isu.login()
             with self.s.db:
                 self.s.set("isu_connected",True)
-            await self.mail.sync()
-            message=self.s.get("isu_status",{}).get("detail","Входящие подключены.")
+            message = "Вход сохранён. Входящие будут проверяться автоматически."
+            self.mail.last = 0
+            ok = True
         except Exception as e:
-            message=str(e) if isinstance(e,SourceError) else "Не удалось открыть окно ИСУ. Проверь графический сеанс."
+            ok = False
+            message = str(e) if isinstance(e, SourceError) else "Не удалось сохранить вход в ИСУ. Проверь доступ к папке data и окно Chromium."
+        finally:
+            self.mail.signing_in = False
         with self.s.db:
-            self.s.post(self.s.get("owner"),"✉️ ИСУ · "+message)
+            self.s.set("isu_status", {"ok": ok, "detail": message})
+            self.s.post(self.s.get("owner"), "✉️ ИСУ · " + message)
+
+    def start_check(self, report=False):
+        self.report_check |= report
+        if self.check_job is None or self.check_job.done():
+            self.check_job = asyncio.create_task(self.check_services())
+        return "Проверяю подключения. Результаты появятся в профиле" + (" и в этом чате." if report else ".")
+
+    async def check_services(self):
+        checks = [self.check_telegram(), self.mail.sync()]
+        if self.s.get("connected") and not self.monitor.signing_in and not self.monitor.lock.locked():
+            checks.append(self.monitor.fetch())
+        try:
+            await asyncio.gather(*checks)
+            if self.report_check:
+                statuses = state(self)["services"]
+                labels = {"isu":"Входящие ИСУ","mail":"Почта","itmo":"my.itmo","telegram":"Telegram"}
+                with self.s.db:
+                    self.s.post(self.s.get("owner"), "\n".join(f"{labels[k]} · {v['detail']}" for k,v in statuses.items()))
+        finally:
+            self.report_check = False
 
     async def check_telegram(self):
         try:
-            await self.api.call("getMe")
+            await asyncio.wait_for(self.api.call("getMe"), 8)
             result={"ok":True,"detail":"Telegram ответил в "+datetime.now(MSK).strftime("%H:%M МСК")}
-        except (TelegramError,AttributeError):
+        except (TelegramError,AttributeError,asyncio.TimeoutError):
             result={"ok":False,"detail":"Нет ответа Telegram."}
         with self.s.db:
             self.s.set("telegram_status",result)
@@ -215,9 +244,7 @@ class Bot:
             self.s.set("weekly_on",text=="Включить сводку")
             return self.settings()
         if text=="🔎 Проверить связь":
-            from miniapp import action
-            result=await action(self,"check_services",{})
-            return "\n".join(f"{k} · {v['detail']}" for k,v in result["services"].items()),self.s.get("keyboard",MAIN)
+            return self.start_check(report=True), self.s.get("keyboard",MAIN)
         if text == SETTINGS or (text == BACK and name in ("interval","clock","travel","weekly")):
             return self.settings()
         if text in (TODAY,TOMORROW):
@@ -367,13 +394,6 @@ async def main():
             raise SystemExit("Проверь OWNER_TELEGRAM_ID и владельца существующей базы.")
         with store.db:
             store.set("owner",int(configured))
-    appurl=os.getenv("MINI_APP_URL","").strip()
-    if appurl:
-        from urllib.parse import urlsplit
-        parsed=urlsplit(appurl)
-        if parsed.scheme!="https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise SystemExit("MINI_APP_URL должен быть публичным HTTPS-адресом приложения.")
-        await api.call("setChatMenuButton",menu_button={"type":"web_app","text":"Открыть Пару","web_app":{"url":appurl}})
     with store.db:
         store.set("telegram_status",{"ok":True,"detail":"Связь установлена при запуске."})
     runner=await start_web(bot,token)
@@ -381,7 +401,7 @@ async def main():
     if not store.get("owner"):
         print(f"Код привязки для первого входа: {bot.pair_code}", flush=True)
     try:
-        await asyncio.gather(poll(api, bot), deliver(api,store), clock(bot.monitor),bot.mail.run())
+        await asyncio.gather(poll(api, bot), deliver(api,store), clock(bot.monitor),bot.mail.run(),serve_menu(api,store))
     finally:
         if bot.login_job and not bot.login_job.done():
             bot.login_job.cancel()
@@ -389,6 +409,9 @@ async def main():
         if bot.isu_job and not bot.isu_job.done():
             bot.isu_job.cancel()
             await asyncio.gather(bot.isu_job,return_exceptions=True)
+        if bot.check_job and not bot.check_job.done():
+            bot.check_job.cancel()
+            await asyncio.gather(bot.check_job,return_exceptions=True)
         await runner.cleanup()
         await bot.isu.close()
         await portal.close()

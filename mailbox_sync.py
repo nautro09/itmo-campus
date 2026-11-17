@@ -179,6 +179,7 @@ class Mail:
         self.imap = ImapSource()
         self.lock = asyncio.Lock()
         self.last = 0
+        self.signing_in = False
 
     def record(self, src, messages, notify):
         for x in messages:
@@ -188,10 +189,13 @@ class Mail:
                 self.s.post(self.s.get("owner"),f"✉️ {src} · {x['sender']}\n{x['subject']}\n\n{x['body'] or 'Текст отсутствует.'}")
 
     async def sync(self):
+        if self.lock.locked():
+            async with self.lock:
+                return
         async with self.lock:
             self.last = time.monotonic()
             for src,enabled in (("ИСУ",self.s.get("isu_connected")),("Email",bool(self.imap.host and self.imap.user))):
-                if not enabled:
+                if not enabled or (src == "ИСУ" and self.signing_in):
                     continue
                 key = "isu" if src=="ИСУ" else "mail"
                 try:

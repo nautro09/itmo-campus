@@ -1,5 +1,9 @@
 """Read the visible, signed-in ISU inbox without opening or marking a message."""
 import asyncio
+import json
+import os
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from urllib.parse import urlsplit
 
 from playwright.async_api import Error as BrowserError, async_playwright
@@ -14,9 +18,24 @@ ROWS = """rows => rows.map(row => {
 })"""
 
 
+def isu_url(address):
+    parts = urlsplit(address)
+    return parts.scheme == "https" and parts.netloc in ("isu.ifmo.ru", "isu.itmo.ru")
+
+
+# Some portal layouts put the inbox in a frame or keep the portal title.
+INBOX_READY = """() => !!document.querySelector('#tet') && (
+    /входящие/i.test(document.title) ||
+    Array.from(document.querySelectorAll('h1,h2,[aria-current=page],.t-Breadcrumb-label'))
+         .some(el => /входящие/i.test(el.textContent)) ||
+    /[?&]p=2422:4(?:[:&]|$)/i.test(location.search))"""
+
+
 class IsuInbox:
     def __init__(self, profile):
-        self.profile = profile
+        self.profile = Path(profile)
+        self.checkpoint = self.profile / "isu-session.json"
+        self.frame = None
         self.lock = asyncio.Lock()
         self.engine = self.context = self.page = None
 
@@ -25,7 +44,7 @@ class IsuInbox:
             if self.context:
                 await self.context.close()
         finally:
-            self.context = self.page = None
+            self.context = self.page = self.frame = None
             if self.engine:
                 await self.engine.stop()
                 self.engine = None
@@ -35,25 +54,74 @@ class IsuInbox:
         self.context = await self.engine.chromium.launch_persistent_context(
             str(self.profile),headless=not interactive,locale="ru-RU",timezone_id="Europe/Moscow")
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
-        await self.page.goto(ISU,wait_until="domcontentloaded")
+        self.context.set_default_navigation_timeout(12000)
+        target = ISU
+        if self.checkpoint.is_file():
+            try:
+                saved = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+                if isu_url(saved["url"]):
+                    await self.context.add_cookies(saved["cookies"])
+                    if not interactive:
+                        target = saved["url"]
+            except (KeyError, ValueError, TypeError, BrowserError):
+                pass
+        try:
+            await self.page.goto(target, wait_until="commit")
+        except BrowserError:
+            if target == ISU:
+                raise
+            await self.page.goto(ISU, wait_until="commit")
+
+    async def save_session(self):
+        cookies = await self.context.cookies()
+        with NamedTemporaryFile(dir=self.profile, mode="w", encoding="utf-8", delete=False) as tmp:
+            try:
+                json.dump({"url": self.frame.url, "cookies": cookies}, tmp)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                os.replace(tmp.name, self.checkpoint)
+            finally:
+                Path(tmp.name).unlink(missing_ok=True)
 
     async def reach_inbox(self, interactive):
-        deadline = asyncio.get_running_loop().time() + (300 if interactive else 25)
-        followed = False
-        while asyncio.get_running_loop().time() < deadline:
-            url = urlsplit(self.page.url)
-            if url.scheme == "https" and url.hostname == "isu.ifmo.ru":
-                if await self.page.locator("#tet").count() and "Входящие" in await self.page.title():
-                    return
-                link = self.page.locator('a[href*="P58_DEP_ID:715"]').first
-                if not followed and await link.count():
-                    target = await link.evaluate("a => a.href")
-                    url = urlsplit(target)
-                    if url.scheme == "https" and url.hostname == "isu.ifmo.ru":
-                        await self.page.goto(target,wait_until="domcontentloaded")
-                        followed = True
-            await asyncio.sleep(1)
-        raise SourceError("Открой «Войти в ИСУ» и перейди в «Сообщения → Входящие» в окне браузера.")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + (300 if interactive else 12)
+        followed = set()
+        fallback = not interactive and self.page.url != ISU and self.checkpoint.is_file()
+        while loop.time() < deadline:
+            pages = list(reversed(self.context.pages))
+            if not pages:
+                raise SourceError("Окно ИСУ закрыто. Нажми «Войти в ИСУ» повторно.")
+            candidate = None
+            for page in pages:
+                for frame in page.frames:
+                    if not isu_url(frame.url):
+                        continue
+                    try:
+                        if await frame.evaluate(INBOX_READY):
+                            self.page, self.frame = page, frame
+                            return
+                        link = await frame.evaluate("""() => Array.from(document.links).find(a =>
+                            /[?&]p=2422:4:/i.test(a.href) ||
+                            /P58_DEP_ID:715/i.test(a.href) ||
+                            a.textContent.trim().toLowerCase() === 'входящие')?.href""")
+                        if link and isu_url(link) and link not in followed:
+                            candidate = (frame, link)
+                    except BrowserError:
+                        continue  # Login redirects can replace the frame during inspection.
+            if candidate:
+                frame, link = candidate
+                followed.add(link)
+                try:
+                    await frame.goto(link, wait_until="commit")
+                except BrowserError:
+                    pass
+            elif fallback and loop.time() > deadline - 9:
+                fallback = False
+                await self.page.goto(ISU, wait_until="commit")
+            else:
+                await asyncio.sleep(0.4)
+        raise SourceError("Сеанс ИСУ не подтверждён. Нажми «Войти в ИСУ» и открой «Сообщения → Входящие».")
 
     async def login(self):
         async with self.lock:
@@ -61,6 +129,7 @@ class IsuInbox:
             try:
                 await self.open(True)
                 await self.reach_inbox(True)
+                await self.save_session()
             except BrowserError:
                 raise SourceError("Вход в ИСУ не завершён. Проверь графический сеанс и окно входа.") from None
             finally:
@@ -73,21 +142,22 @@ class IsuInbox:
                     await self.close()
                     await self.open(False)
                 else:
-                    await self.page.reload(wait_until="domcontentloaded")
+                    await self.page.reload(wait_until="commit")
                 await self.reach_inbox(False)
-                rows = self.page.locator("#tet .message[data-id]")
+                await self.save_session()
+                rows = self.frame.locator("#tet .message[data-id]")
                 while True:
                     items = await rows.evaluate_all(ROWS)
                     if any(not x["key"] or any(x[k] is None for k in ("sender","body","subject","date")) for x in items):
                         raise SourceError("Разметка входящих ИСУ изменилась.")
                     if seen is None or not items or any(x["key"] in seen for x in items):
                         break
-                    more = self.page.locator("#next")
+                    more = self.frame.locator("#next")
                     if not await more.is_visible() or not (await more.inner_text()).strip():
                         break
                     count = len(items)
                     await more.click(timeout=5000)
-                    await self.page.wait_for_function(
+                    await self.frame.wait_for_function(
                         "n => document.querySelectorAll('#tet .message[data-id]').length > n || !document.getElementById('next')?.offsetHeight",
                         arg=count,timeout=12000)
                     if await rows.count() == count:

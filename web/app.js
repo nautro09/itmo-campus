@@ -106,12 +106,30 @@
     return result;
   }
   function notify(message){clearTimeout(toastTimer);toast.textContent=message;toast.classList.add("on");toastTimer=setTimeout(()=>toast.classList.remove("on"),3600)}
+  let pollTimer;
+  function watchCheck(){
+    clearTimeout(pollTimer);
+    if(!state?.check_pending || demo)return;
+    pollTimer=setTimeout(async()=>{
+      try{
+        const update=await request("state",{});
+        state.services=update.services;
+        state.check_pending=update.check_pending;
+        if(tab==="profile"){
+          const list=main.querySelector(".service-list");
+          if(list){const panel=document.createElement("div");panel.innerHTML=profile();list.replaceChildren(...panel.querySelector(".service-list").children)}
+        }
+        if(!state.check_pending)notify("Проверка подключений завершена.");
+        watchCheck();
+      }catch{notify("Не удалось обновить статусы. Нажми «Проверить подключения» ещё раз.")}
+    },1800);
+  }
   async function perform(action,p={},options={}){
     if(busy)return null;busy=true;main.setAttribute("aria-busy","true");
     try{
       const result=demo?simulate(action,p):await request("action",{action,...p});
       if(result.draft)return result.draft;
-      state=normalize(result);if(options.close&&dialog.open)dialog.close();
+      state=normalize(result);watchCheck();if(options.close&&dialog.open)dialog.close();
       render();
       if(result.notice){
         if(options.long||result.notice.length>160||result.notice.includes("\n"))showReport(options.title||"Результат проверки",result.notice);
@@ -322,7 +340,7 @@
       }
       tg=window.Telegram?.WebApp;initData=tg?.initData||"";tg?.ready();tg?.expand();
       if(!initData)throw Error("Для доступа к личным данным открой приложение кнопкой в чате со своим ботом.");
-      state=normalize(await request("state",{}));render();
+      state=normalize(await request("state",{}));render();watchCheck();
     }catch(e){
       main.innerHTML=mast("Мой кампус","Личное приложение студента ИТМО")+`<section class="panel">${empty("Личный кабинет закрыт",e?.message||"Не удалось открыть приложение.",'<a class="btn minor" href="?demo=1">Посмотреть демоверсию</a>')}</section>`;
     }
