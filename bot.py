@@ -18,7 +18,7 @@ from store import Store
 from dotenv import load_dotenv
 from extras import draft_task, weekly_report
 from inbox import IsuInbox
-from mailbox_sync import Mail
+from mailbox_sync import ENV, Mail
 from miniapp import start_web, state
 from menu import serve_menu
 from planner import FROM_TEXT, MAIL, WEEK
@@ -378,7 +378,7 @@ async def main():
         process_lock.execute("BEGIN EXCLUSIVE")
     except sqlite3.OperationalError:
         raise SystemExit("Бот уже запущен или его папка данных недоступна.")
-    load_dotenv(ROOT/".env",interpolate=False)
+    load_dotenv(ENV,interpolate=False)
     token = os.getenv("BOT_TOKEN","")
     if not token or ":" not in token or any(c.isspace() or c in "/?#" for c in token):
         raise SystemExit("Заполни BOT_TOKEN в локальном .env. Для перехода с v1 перенеси значение data/telegram-token в .env.")

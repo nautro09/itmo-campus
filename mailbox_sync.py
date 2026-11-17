@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 from dotenv import load_dotenv, set_key
 from itmo import MSK, SourceError
 
-ENV = Path(__file__).resolve().parent / ".env"
+ENV = Path(os.environ.get("CAMPUS_ENV_FILE") or Path(__file__).resolve().parent / ".env")
 SCOPE = "offline_access https://outlook.office.com/IMAP.AccessAsUser.All"
 
 

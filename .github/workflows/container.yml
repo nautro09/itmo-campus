@@ -1,0 +1,13 @@
+name: Container
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  compose:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet && docker compose build
+      - name: Test bot and Chromium
+        run: |
+          docker run --rm --init --shm-size=1g -e TEST_ISU_BROWSER=1 -v "$PWD/tests:/app/tests:ro" itmo-campus:local python -m unittest discover -s tests

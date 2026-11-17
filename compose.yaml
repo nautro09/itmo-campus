@@ -1,0 +1,23 @@
+services:
+  bot:
+    build: .
+    image: itmo-campus:local
+    init: true
+    restart: unless-stopped
+    user: "${CAMPUS_UID:-1000}:${CAMPUS_GID:-1000}"
+    shm_size: 1gb
+    environment:
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "8787"
+      CAMPUS_ENV_FILE: /app/.private/.env
+    volumes:
+      - ./data:/app/data
+      - ./.private:/app/.private
+    ports:
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/', timeout=3).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
