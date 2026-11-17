@@ -1,0 +1,407 @@
+import asyncio
+import hmac
+import json
+import os
+import secrets
+import sqlite3
+import sys
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+from itmo import MSK, Portal, SourceError
+from monitor import Monitor
+from planner import BACK, HOME, MAIN, SETTINGS, TODAY, TOMORROW, Planner, pairs
+from store import Store
+from dotenv import load_dotenv
+from extras import draft_task, weekly_report
+from inbox import IsuInbox
+from mailbox_sync import Mail
+from miniapp import start_web
+from planner import FROM_TEXT, MAIL, WEEK
+
+ROOT = Path(__file__).resolve().parent
+LOGIN = "🔑 Войти в my.itmo"
+CLOCK = "🕰 Время рассылки"
+INTERVAL = "🔄 Частота проверки"
+PAIR = "🔗 Привязать чат"
+
+
+class TelegramError(Exception):
+    def __init__(self, code, delay=3):
+        super().__init__(f"Telegram HTTP {code}")
+        self.code, self.delay = code, delay
+
+
+class Telegram:
+    def __init__(self, token):
+        self.base = "https://api.telegram.org/bot" + token + "/"
+
+    def _call(self, method, args):
+        req = Request(self.base+method, data=json.dumps(args).encode(),
+                      headers={"Content-Type":"application/json"})
+        try:
+            with urlopen(req, timeout=35) as response:
+                result = json.load(response)
+        except HTTPError as e:
+            try:
+                delay = json.load(e).get("parameters", {}).get("retry_after", 3)
+            except (ValueError, OSError):
+                delay = 3
+            raise TelegramError(e.code, delay) from None
+        except (URLError, OSError, ValueError):
+            raise TelegramError(0) from None
+        if not result.get("ok"):
+            raise TelegramError(result.get("error_code", 0))
+        return result["result"]
+
+    async def call(self, method, **args):
+        return await asyncio.to_thread(self._call, method, args)
+
+
+class Bot:
+    def __init__(self, store, portal):
+        self.s = store
+        self.plan = Planner(store)
+        self.monitor = Monitor(store, portal)
+        self.portal = portal
+        self.isu = IsuInbox(ROOT/"data"/"isu-browser")
+        self.mail = Mail(store,self.isu)
+        self.isu_job = None
+        self.api = None
+        self.login_job = None
+        self.pair_code = secrets.token_urlsafe(8)
+        self.pair_attempts = {}
+
+    def settings(self):
+        st = self.s
+        interval = st.get("interval",1)
+        on = st.get("morning_on",True)
+        connected = "подключено" if st.get("connected") else "ожидает входа"
+        checked = st.get("last_check")
+        last = datetime.fromisoformat(checked).strftime("%d.%m в %H:%M") if checked else "ещё не было"
+        message = (f"⚙️ Настройки\n\nmy.itmo · {connected}\nПоследняя проверка · {last}\n"
+                   f"Утренняя рассылка · {st.get('morning_time','07:30')+' МСК' if on else 'выключена'}\n"
+                   f"Изменения на 7 дней · {str(interval)+' мин' if interval else 'проверка выключена'}")
+        if st.get("source_error"):
+            message += "\n\n" + st.get("source_error")
+        toggle = "Выключить рассылку" if on else "Включить рассылку"
+        return self.plan.screen("settings", message, [[LOGIN,"🔑 Войти в ИСУ"], [CLOCK, toggle], [INTERVAL],
+                              ["🚶 Дорога", "🗓 Сводка по воскресеньям"],["🔎 Проверить связь"]])
+
+    def begin_login(self, isu=False):
+        if isu:
+            if not self.isu_job or self.isu_job.done():
+                self.isu_job=asyncio.create_task(self.sign_into_inbox())
+            return "В окне Chromium на компьютере с ботом войди в ИСУ и открой «Сообщения → Входящие»."
+        if not self.login_job or self.login_job.done():
+            self.login_job = asyncio.create_task(self.sign_in())
+        return "На компьютере с ботом откроется окно ИТМО ID. Войди в аккаунт. После подключения придёт сообщение."
+
+    async def sign_into_inbox(self):
+        try:
+            await self.isu.login()
+            with self.s.db:
+                self.s.set("isu_connected",True)
+            await self.mail.sync()
+            message=self.s.get("isu_status",{}).get("detail","Входящие подключены.")
+        except Exception as e:
+            message=str(e) if isinstance(e,SourceError) else "Не удалось открыть окно ИСУ. Проверь графический сеанс."
+        with self.s.db:
+            self.s.post(self.s.get("owner"),"✉️ ИСУ · "+message)
+
+    async def check_telegram(self):
+        try:
+            await self.api.call("getMe")
+            result={"ok":True,"detail":"Telegram ответил в "+datetime.now(MSK).strftime("%H:%M МСК")}
+        except (TelegramError,AttributeError):
+            result={"ok":False,"detail":"Нет ответа Telegram."}
+        with self.s.db:
+            self.s.set("telegram_status",result)
+
+    def draft(self,text):
+        draft=draft_task(text)
+        message=(f"Черновик задания\n{draft['title']}\nКатегория · {draft['category']}\n"
+                 f"Срок · {draft['due'] or 'нужно выбрать'}\nПодзадач · {len(draft['steps'])}")
+        return self.plan.screen("draft",message,[["Сохранить черновик","Изменить срок"],["Изменить название","Изменить категорию"],[BACK]],draft=draft)
+
+    async def sign_in(self):
+        self.monitor.signing_in = True
+        try:
+            await self.portal.login()
+            with self.s.db:
+                self.s.set("connected", True)
+                self.s.set("last_attempt", 0)
+                self.s.post(self.s.get("owner"), "✅ Личное расписание подключено. Загружаю ближайшие 7 дней.")
+            await self.monitor.fetch()
+        except SourceError as e:
+            with self.s.db:
+                self.s.post(self.s.get("owner"), str(e))
+        except Exception as e:
+            print("Ошибка подключения:", type(e).__name__, file=sys.stderr)
+            with self.s.db:
+                self.s.post(self.s.get("owner"), "Не удалось открыть окно входа. Проверь установку Chromium на компьютере с ботом.")
+        finally:
+            self.monitor.signing_in = False
+
+    async def route(self, text):
+        screen = self.s.get("screen", {"name":"home"})
+        name = screen["name"]
+        if text in (HOME, "/start"):
+            return self.plan.home()
+        if text == FROM_TEXT:
+            return self.plan.screen("from_text","Перешли сообщение преподавателя или отправь текст задания.",[[BACK]])
+        if text==WEEK:
+            if self.s.get("connected") and not self.monitor.signing_in:
+                await self.monitor.fetch()
+            return self.plan.screen("home",weekly_report(self.s,datetime.now(MSK).date()),MAIN)
+        if text=="🔑 Войти в ИСУ":
+            return self.begin_login(True),self.s.get("keyboard",MAIN)
+        if text==MAIL or (text==BACK and name=="mail_item"):
+            rows=self.s.db.execute("SELECT id,subject FROM mail ORDER BY id DESC LIMIT 10").fetchall()
+            buttons=[[f"✉ {r['id']} · {r['subject'][:36]}"] for r in rows]
+            switch="Выключить пересылку" if self.s.get("mail_on",True) else "Включить пересылку"
+            return self.plan.screen("mail","Последние письма" if rows else "Здесь появятся письма после подключения входящих.",
+                       buttons+[["🔑 Войти в ИСУ","Проверить почту"],[switch]])
+        if name=="mail" and text in ("Включить пересылку","Выключить пересылку"):
+            self.s.set("mail_on",text=="Включить пересылку")
+            return await self.route(MAIL)
+        if text=="Проверить почту" and name=="mail":
+            await self.mail.sync()
+            msg,rows=await self.route(MAIL)
+            details=[self.s.get(k,{}).get("detail") for k in ("isu_status","mail_status")]
+            return msg+"\n"+("\n".join(filter(None,details)) or "Подключи ИСУ или заполни IMAP в .env."),rows
+        if name=="mail" and text.startswith("✉ ") and text.split()[1].isdigit():
+            item=self.s.db.execute("SELECT * FROM mail WHERE id=?",(int(text.split()[1]),)).fetchone()
+            if item:
+                return self.plan.screen("mail_item",f"{item['sender']} · {item['date']}\n{item['subject']}\n\n{item['body']}",
+                                        [["Создать задание из письма"],[BACK]],mail_id=item["id"])
+        if name=="mail_item" and text=="Создать задание из письма":
+            row=self.s.db.execute("SELECT subject,body FROM mail WHERE id=?",(screen["mail_id"],)).fetchone()
+            return self.draft(row["subject"]+"\n"+row["body"])
+        if name=="from_text" and text!=BACK:
+            return self.draft(text)
+        if name=="draft":
+            d=screen["draft"]
+            data=dict(d,mode="new")
+            if text=="Изменить название":
+                return self.plan.screen("draft_title","Как назвать задание?",[[BACK]],draft=d)
+            if text=="Изменить категорию":
+                return self.plan.categories(data)
+            if text=="Изменить срок" or (text=="Сохранить черновик" and not d["due"]):
+                return self.plan.date_picker(data)
+            if text=="Сохранить черновик":
+                return self.plan.handle("За час",dict(name="lead",data=data))
+        if name=="draft_title" and text!=BACK:
+            d=screen["draft"]
+            if not 1<=len(text)<=160:
+                return "Введи название до 160 символов.",self.s.get("keyboard",MAIN)
+            d["title"]=text
+            return self.plan.screen("draft",f"{text}\n{d['due'] or 'Выбери срок'}",[["Сохранить черновик","Изменить срок"],[BACK]],draft=d)
+        if text=="🚶 Дорога" and name=="settings":
+            return self.plan.screen("travel","Сколько минут обычно занимает дорога до корпуса? Можно ввести число от 1 до 240.",[["20","35","50"],["Выключить напоминание"],[BACK]])
+        if name=="travel" and (text=="Выключить напоминание" or text.isdecimal() and 1<=int(text)<=240):
+            self.s.set("travel_on",text!="Выключить напоминание")
+            if text.isdecimal():
+                self.s.set("travel_minutes",int(text))
+            return self.settings()
+        if text=="🗓 Сводка по воскресеньям" and name=="settings":
+            on=self.s.get("weekly_on",True)
+            return self.plan.screen("weekly","Воскресная сводка в 18:00 МСК · "+("включена" if on else "выключена"),
+                                    [["Выключить сводку" if on else "Включить сводку"],[BACK]])
+        if name=="weekly" and text in ("Включить сводку","Выключить сводку"):
+            self.s.set("weekly_on",text=="Включить сводку")
+            return self.settings()
+        if text=="🔎 Проверить связь":
+            from miniapp import action
+            result=await action(self,"check_services",{})
+            return "\n".join(f"{k} · {v['detail']}" for k,v in result["services"].items()),self.s.get("keyboard",MAIN)
+        if text == SETTINGS or (text == BACK and name in ("interval","clock","travel","weekly")):
+            return self.settings()
+        if text in (TODAY,TOMORROW):
+            if not self.s.get("connected"):
+                return self.plan.screen("settings", "Подключи личное расписание. Окно для входа откроется на компьютере, где запущен бот.", [[LOGIN]])
+            if self.monitor.signing_in:
+                return "Дождись окончания входа в окне ИТМО.", self.s.get("keyboard", MAIN)
+            await self.monitor.fetch()
+            day = datetime.now(MSK).date() + timedelta(days=int(text == TOMORROW))
+            return self.plan.screen("home", self.monitor.show_day(day), MAIN)
+        if name == "settings":
+            if text == LOGIN:
+                return self.begin_login(), self.s.get("keyboard",MAIN)
+            if text == INTERVAL:
+                return self.plan.screen("interval", "Как часто проверять изменения на ближайшие 7 дней?",
+                                        pairs(["1 мин", "5 мин", "15 мин", "30 мин", "Выключить проверки"])+[[BACK]])
+            if text == CLOCK:
+                return self.plan.screen("clock", "Выбери время утренней рассылки или введи ЧЧ:ММ по Москве.",
+                                        pairs(["06:30","07:00","07:30","08:00","08:30","09:00"])+[[BACK]])
+            if text in ("Включить рассылку","Выключить рассылку"):
+                self.s.set("morning_on", text == "Включить рассылку")
+                return self.settings()
+        if name == "interval" and text in ("1 мин","5 мин","15 мин","30 мин","Выключить проверки"):
+            self.s.set("interval", int(text.split()[0]) if text.endswith("мин") else 0)
+            self.s.set("last_attempt",0)
+            return self.settings()
+        if name == "clock":
+            try:
+                at = datetime.strptime(text,"%H:%M").strftime("%H:%M")
+            except ValueError:
+                return "Введи время в формате ЧЧ:ММ.", self.s.get("keyboard", MAIN)
+            self.s.set("morning_time", at)
+            self.s.set("morning_on", True)
+            return self.settings()
+        return self.plan.handle(text, screen)
+
+    async def update(self, event):
+        uid = event["update_id"]
+        if uid == self.s.get("last_update"):
+            return
+        msg = event.get("message", {})
+        chat = msg.get("chat", {})
+        text = (msg.get("text") or msg.get("caption") or "").strip()
+        chat_id = chat.get("id")
+        if chat.get("type") == "private" and chat_id == msg.get("from",{}).get("id") and text:
+            owner = self.s.get("owner")
+            if not owner:
+                now = time.monotonic()
+                recent = [t for t in self.pair_attempts.get(chat_id,[]) if t > now-60]
+                if text in ("/start", PAIR):
+                    response = "Введи код привязки из терминала на компьютере с ботом.", [[PAIR]]
+                elif len(recent) >= 5:
+                    response = "Попробуй через минуту.", [[PAIR]]
+                elif hmac.compare_digest(text.encode(), self.pair_code.encode()):
+                    self.s.set("owner", chat_id)
+                    response = self.plan.home()
+                    response = ("Чат привязан. Открой «Настройки», чтобы подключить my.itmo.\n\n"+response[0], response[1])
+                else:
+                    self.pair_attempts[chat_id] = recent + [now]
+                    response = "Код не подошёл. Проверь код в терминале.", [[PAIR]]
+            elif owner == chat_id:
+                response = self.draft(text) if msg.get("forward_origin") else await self.route(text)
+            else:
+                response = None
+            if response:
+                message, rows = response
+                if self.s.get("owner") == chat_id:
+                    self.s.set("keyboard",rows)
+                self.s.post(chat_id,message,rows)
+        self.s.set("last_update",uid)
+        self.s.db.commit()
+
+
+async def poll(api, bot):
+    while True:
+        try:
+            last = bot.s.get("last_update")
+            opts = dict(offset=last+1) if last is not None else {}
+            updates = await api.call("getUpdates", timeout=20, allowed_updates=["message"], **opts)
+            for update in updates:
+                await bot.update(update)
+        except TelegramError as e:
+            if e.code in (401,404,409):
+                raise
+            await asyncio.sleep(e.delay)
+        except Exception as e:
+            bot.s.db.rollback()
+            print("Ошибка обработки сообщения:", type(e).__name__, file=sys.stderr)
+            await asyncio.sleep(3)
+
+
+async def deliver(api, store):
+    while True:
+        item = store.db.execute("SELECT * FROM outbox ORDER BY id LIMIT 1").fetchone()
+        if not item:
+            await asyncio.sleep(.3)
+            continue
+        args = {"chat_id":item["chat"], "text":item["text"], "link_preview_options":{"is_disabled":True}}
+        if item["keyboard"]:
+            args["reply_markup"] = {"keyboard":json.loads(item["keyboard"]), "resize_keyboard":True, "is_persistent":True}
+        try:
+            await api.call("sendMessage", **args)
+        except TelegramError as e:
+            if e.code == 401:
+                raise
+            if e.code not in (400,403):
+                await asyncio.sleep(e.delay)
+                continue
+            print("Telegram отклонил сообщение, код", e.code, file=sys.stderr)
+        with store.db:
+            store.db.execute("DELETE FROM outbox WHERE id=?", (item["id"],))
+        await asyncio.sleep(1.05)
+
+
+async def clock(monitor):
+    while True:
+        try:
+            await monitor.tick()
+        except Exception as e:
+            print("Проверка не завершена:", type(e).__name__, file=sys.stderr)
+        await asyncio.sleep(3)
+
+
+async def main():
+    os.umask(0o077)
+    data = ROOT / "data"
+    data.mkdir(mode=0o700, exist_ok=True)
+    # A second launcher must not deliver the same outbox or share the browser profile.
+    process_lock = sqlite3.connect(data / "instance.lock", timeout=0)
+    try:
+        process_lock.execute("BEGIN EXCLUSIVE")
+    except sqlite3.OperationalError:
+        raise SystemExit("Бот уже запущен или его папка данных недоступна.")
+    load_dotenv(ROOT/".env",interpolate=False)
+    token = os.getenv("BOT_TOKEN","")
+    if not token or ":" not in token or any(c.isspace() or c in "/?#" for c in token):
+        raise SystemExit("Заполни BOT_TOKEN в локальном .env. Для перехода с v1 перенеси значение data/telegram-token в .env.")
+    api = Telegram(token)
+    me = await api.call("getMe")
+    store = Store(data/"planner.sqlite3")
+    portal = Portal(data/"my-itmo-browser")
+    bot = Bot(store, portal)
+    bot.api=api
+    configured=os.getenv("OWNER_TELEGRAM_ID","").strip()
+    if configured:
+        if not configured.isdecimal() or int(configured)<=0 or store.get("owner") not in (None,int(configured)):
+            raise SystemExit("Проверь OWNER_TELEGRAM_ID и владельца существующей базы.")
+        with store.db:
+            store.set("owner",int(configured))
+    appurl=os.getenv("MINI_APP_URL","").strip()
+    if appurl:
+        from urllib.parse import urlsplit
+        parsed=urlsplit(appurl)
+        if parsed.scheme!="https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise SystemExit("MINI_APP_URL должен быть публичным HTTPS-адресом приложения.")
+        await api.call("setChatMenuButton",menu_button={"type":"web_app","text":"Открыть Пару","web_app":{"url":appurl}})
+    with store.db:
+        store.set("telegram_status",{"ok":True,"detail":"Связь установлена при запуске."})
+    runner=await start_web(bot,token)
+    print(f"Бот запущен: https://t.me/{me['username']}", flush=True)
+    if not store.get("owner"):
+        print(f"Код привязки для первого входа: {bot.pair_code}", flush=True)
+    try:
+        await asyncio.gather(poll(api, bot), deliver(api,store), clock(bot.monitor),bot.mail.run())
+    finally:
+        if bot.login_job and not bot.login_job.done():
+            bot.login_job.cancel()
+            await asyncio.gather(bot.login_job, return_exceptions=True)
+        if bot.isu_job and not bot.isu_job.done():
+            bot.isu_job.cancel()
+            await asyncio.gather(bot.isu_job,return_exceptions=True)
+        await runner.cleanup()
+        await bot.isu.close()
+        await portal.close()
+        process_lock.close()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    except TelegramError as exc:
+        msg = {401:"Telegram отклонил токен. Проверь BOT_TOKEN в .env.",
+               404:"Telegram не узнал токен. Проверь BOT_TOKEN в .env.",
+               409:"Telegram сообщил о конфликте. Проверь, что работает один экземпляр бота и для него выключен webhook."}
+        raise SystemExit(msg.get(exc.code, f"Не удалось связаться с Telegram (код {exc.code})."))
