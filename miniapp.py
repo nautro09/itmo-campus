@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 
 from aiohttp import web
-from extras import draft_task, weekly_report
+from extras import campus_names, draft_task, weekly_report
 from itmo import MSK
 from planner import REMIND
 
@@ -49,14 +49,12 @@ def state(bot):
     statuses = {"itmo":{"ok":available,"detail":s.get("source_error") or
                 ("Проверено "+datetime.fromisoformat(checked).strftime("%d.%m в %H:%M МСК") if checked else "Ожидает подключения")},
                 "telegram":s.get("telegram_status",{"ok":False,"detail":"Ещё не проверено"})}
-    for key in ("mail","isu"):
-        statuses[key]=s.get(key+"_status",{"ok":False,"detail":"Ожидает подключения"})
-    if bot.mail.signing_in:
-        statuses["isu"] = {"ok":False, "detail":"Ожидаю входа в окне Chromium"}
+    statuses.update(bot.mail.statuses())
+    latest = set(s.get("latest_dates", []))
     pending = bot.check_job is not None and not bot.check_job.done()
-    return dict(check_pending=pending, today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
+    return dict(campuses=campus_names(s), bars=bot.grades.report(), check_pending=pending, today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
                 settings={k:s.get(k,v) for k,v in DEFAULTS.items()},services=statuses,
-                days=[dict(date=d,lessons=item["lessons"],checked=item["checked"],stale=bool(s.get("source_error") or d not in s.get("latest_dates",[]) or item["checked"][:10]!=now.date().isoformat())) for d,item in sorted(s.get("cache",{}).items()) if d>=now.date().isoformat()],
+                days=[dict(date=d,lessons=item["lessons"],checked=item["checked"],stale=bool(s.get("source_error") or d not in latest or item["checked"][:10]!=now.date().isoformat())) for d,item in sorted(s.get("cache",{}).items()) if d>=now.date().isoformat()],
                 tasks=tasks,categories=[r[0] for r in s.db.execute("SELECT name FROM categories ORDER BY name")],
                 mail=[dict(r) for r in s.db.execute("SELECT id,source,subject,sender,date,body FROM mail ORDER BY id DESC LIMIT 100")],
                 warning=s.get("source_error") or "")
@@ -164,6 +162,9 @@ async def action(bot, kind, data):
             await bot.mail.sync()
         if kind=="mail_check" and not (s.get("isu_connected") or bot.mail.imap.host):
             notice="Подключи входящие ИСУ или заполни настройки почты в .env."
+    elif kind=="bars_check":
+        await bot.grades.sync()
+        notice=bot.grades.report()
     elif kind=="week_report":
         notice=weekly_report(s,datetime.now(MSK).date())
     else:

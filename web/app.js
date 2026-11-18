@@ -92,6 +92,7 @@
     case "isu_login":notice="В подключённом боте откроется официальный экран входа в ИСУ на компьютере с ботом. В демоверсии используется тестовый ящик.";break;
     case "itmo_login":notice="В демонстрационном режиме используется вымышленный профиль. В подключённом боте откроется окно официального входа в ИТМО ID на компьютере с ботом.";break;
     case "refresh":notice="Демонстрационное расписание обновлено.";break;
+    case "bars_check":notice="Физика · 42 балла (демопример)";break;
     case "mail_check":notice="Демонстрационный ящик проверен.";break;
     case "check_services":notice="Проверены демонстрационные подключения.";break;
     default:throw Error("Действие пока недоступно.");
@@ -225,7 +226,8 @@
   }
   function mailDate(s){if(!s)return "";const d=new Date(s);return Number.isNaN(+d)?String(s).slice(0,16):new Intl.DateTimeFormat("ru-RU",{day:"numeric",month:"short",timeZone:"Europe/Moscow"}).format(d)}
   function mail(){
-    const svc=state.services.mail||{};
+    const sources=[["ИСУ",state.services.isu],["IMAP",state.services.mail]];
+    const svc={ok:sources.some(([,v])=>v?.ok),detail:sources.map(([k,v])=>k+" · "+(v?.detail||"Ожидает проверки")).join(" / ")};
     const rows=state.mail.map(m=>{const open=idsame(m.id,expandedMail);
       return `<div class="mail-group ${open?"expanded":""}"><button type="button" class="mail-item" data-action="expand-mail" data-id="${esc(m.id)}" aria-expanded="${open}"><span class="mail-icon">${ico("mail")}</span><span class="mail-center"><small>${m.source?`<span class="tag lilac">${esc(m.source)}</span> `:""}${esc(m.sender||"Отправитель не указан")}</small><strong>${esc(m.subject||"Без темы")}</strong></span><time>${esc(m.source==="ИСУ"?m.date:mailDate(m.date))}</time></button>${open?`<div class="details"><div class="mail-body">${esc(m.body||"Текст письма отсутствует.")}</div>${btn("mail-task","Создать задание","plus","minor",{id:m.id})}</div>`:""}</div>`}).join("");
     return mast("Почта","Входящие ИСУ и учебной почты",btn("isu-login","Войти в ИСУ","compass","minor")+iconBtn("mail-check","Проверить почту","refresh"))+`<div class="panel" style="margin-bottom:15px"><div class="settings-list">${switchSetting("mail_on","Пересылать новые письма в Telegram",svc.detail||"Выключенную пересылку можно включить в любой момент.")}</div></div><section class="panel">${section("Входящие",`<span class="meta">${state.mail.length} ${plural(state.mail.length,"письмо","письма","писем")}</span>`)}${rows||empty("Новых писем пока нет",svc.ok?"Здесь появятся письма из подключённого ящика.":"Проверь настройки почтового ящика и соединение в профиле.",tabLink("profile","Перейти в профиль"))}</section>`;
@@ -234,7 +236,7 @@
     return `<label class="setting"><span><b>${esc(title)}</b>${desc?`<small>${esc(desc)}</small>`:""}</span><input class="switch" type="checkbox" data-setting="${key}" ${state.settings[key]?"checked":""} aria-label="${esc(title)}"></label>`;
   }
   function campusFields(){
-    const buildings=new Set();
+    const buildings=new Set(state.campuses||Object.keys(state.settings.campus_minutes||{}));
     for(const day of state.days){
       if(day.stale)continue;
       for(const lesson of day.lessons||[]){
@@ -246,7 +248,7 @@
     const defaultMinutes=Number(state.settings.travel_minutes)||35;
     return [...buildings].sort((a,b)=>a.localeCompare(b,"ru")).map(building=>{
       const value=Object.hasOwn(overrides,building)?overrides[building]:"";
-      return `<label class="setting campus-setting"><span><b>${esc(building)}</b><small>Пустое поле · общее время ${defaultMinutes} мин</small></span><input type="number" min="1" max="300" step="1" data-campus="${esc(building)}" placeholder="${defaultMinutes}" value="${esc(value)}" aria-label="Время в пути в минутах — ${esc(building)}"></label>`;
+      return `<label class="setting campus-setting"><span><b>${esc(building)}</b><small>Пустое поле · общее время ${defaultMinutes} мин</small></span><input type="number" min="1" max="240" step="1" data-campus="${esc(building)}" placeholder="${defaultMinutes}" value="${esc(value)}" aria-label="Время в пути в минутах — ${esc(building)}"></label>`;
     }).join("");
   }
   function profile(){
@@ -256,7 +258,7 @@
     }).join("");
     const variants=Object.entries(themes).map(([k,v])=>`<button type="button" class="theme ${(s.theme||"paper")===k?"selected":""}" aria-pressed="${(s.theme||"paper")===k}" data-action="theme" data-value="${k}"><i class="swatch" aria-hidden="true">${v.slice(1).map(c=>`<i style="background:${c}"></i>`).join("")}</i><span>${v[0]}</span></button>`).join("");
     const interval=[0,1,5,15,30].map(n=>`<option value="${n}" ${Number(s.interval)===n?"selected":""}>${n?n+" мин":"Выключено"}</option>`).join("");
-    return mast("Профиль","ИТМО ID, подключения и настройки")+`<div class="profile-grid"><div class="stack"><section class="panel"><div class="person"><span class="avatar-box">${esc(initials(person.name))}</span><div><h2>${esc(person.name||"Профиль ИТМО ID")}</h2><p class="meta">${person.isu?"ИСУ "+esc(person.isu):"Номер ИСУ пока не получен"}</p></div></div><div class="panel-actions btn-row">${btn("itmo-login","Войти в my.itmo","compass","minor")}${btn("isu-login","Войти в ИСУ","mail","minor")}</div></section><section class="panel">${section("Подключения",iconBtn("check-services","Проверить подключения","refresh"))}<div class="service-list">${status}</div></section><section class="panel">${section("Оформление")}<div class="themes">${variants}</div></section></div><section class="panel">${section("Уведомления")}<div class="settings-list">${switchSetting("morning_on","Утреннее расписание")}<label class="setting"><span><b>Время рассылки</b><small>По Москве</small></span><input data-setting="morning_time" type="time" required value="${esc(s.morning_time||"07:30")}"></label><label class="setting"><span><b>Проверять изменения</b><small>На ближайшие семь дней</small></span><select data-setting="interval">${interval}</select></label>${switchSetting("travel_on","Пора выходить","Напоминание перед первой очной парой.")}<label class="setting"><span><b>Общее время дороги</b><small>В минутах, для всех корпусов</small></span><input min="1" max="300" step="1" type="number" data-setting="travel_minutes" value="${esc(s.travel_minutes??35)}" required></label>${campusFields()}${switchSetting("weekly_on","Недельная сводка","По воскресеньям в 18:00 МСК · пары и дедлайны.")}${switchSetting("mail_on","Письма в Telegram")}</div></section></div>`;
+    return mast("Профиль","ИТМО ID, подключения и настройки")+`<div class="profile-grid"><div class="stack"><section class="panel"><div class="person"><span class="avatar-box">${esc(initials(person.name))}</span><div><h2>${esc(person.name||"Профиль ИТМО ID")}</h2><p class="meta">${person.isu?"ИСУ "+esc(person.isu):"Номер ИСУ пока не получен"}</p></div></div><div class="panel-actions btn-row">${btn("bars-check","Баллы БаРС","file","minor")}${btn("itmo-login","Войти в my.itmo","compass","minor")}${btn("isu-login","Войти в ИСУ","mail","minor")}</div></section><section class="panel">${section("Подключения",iconBtn("check-services","Проверить подключения","refresh"))}<div class="service-list">${status}</div></section><section class="panel">${section("Оформление")}<div class="themes">${variants}</div></section></div><section class="panel">${section("Уведомления")}<div class="settings-list">${switchSetting("morning_on","Утреннее расписание")}<label class="setting"><span><b>Время рассылки</b><small>По Москве</small></span><input data-setting="morning_time" type="time" required value="${esc(s.morning_time||"07:30")}"></label><label class="setting"><span><b>Проверять изменения</b><small>На ближайшие семь дней</small></span><select data-setting="interval">${interval}</select></label>${switchSetting("travel_on","Пора выходить","Напоминание перед первой очной парой.")}<label class="setting"><span><b>Общее время дороги</b><small>В минутах, для всех корпусов</small></span><input min="1" max="240" step="1" type="number" data-setting="travel_minutes" value="${esc(s.travel_minutes??35)}" required></label>${campusFields()}${switchSetting("weekly_on","Недельная сводка","По воскресеньям в 18:00 МСК · пары и дедлайны.")}${switchSetting("mail_on","Письма в Telegram")}</div></section></div>`;
   }
   function render(){shell();main.innerHTML=({today,week,tasks,mail,profile})[tab]()}
   function go(next){if(!Object.hasOwn(names,next)||!state)return;tab=next;const dest="#"+next;if(location.hash!==dest)history.replaceState(null,"",dest);render();window.scrollTo({top:0,behavior:"instant"})}
@@ -280,6 +282,7 @@
     switch(action){
     case "refresh":await perform("refresh",{},{message:s=>s.warning||(!s.services.itmo?.ok||s.days.find(d=>d.date===s.today)?.stale?"Свежесть расписания не подтверждена. Проверь подключение в профиле.":"Соединение с my.itmo подтверждено.")});break;
     case "check-services":await perform("check_services",{},{message:s=>"Подтверждённых подключений: "+Object.values(s.services).filter(v=>v?.ok).length+". Подробности в списке подключений."});break;
+    case "bars-check":await perform("bars_check",{},{long:true,title:"Баллы БаРС"});break;
     case "week-report":await perform("week_report",{},{long:true,title:"Недельная сводка"});break;
     case "mail-check":await perform("mail_check",{},{message:s=>s.services.mail?.ok||s.services.isu?.ok?"Доступные входящие показаны в списке.":"Почтовое подключение не подтверждено. Открой профиль."});break;
     case "isu-login":await perform("isu_login",{},{long:true,title:"Подключение входящих ИСУ"});break;

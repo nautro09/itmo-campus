@@ -188,36 +188,58 @@ class Mail:
             if created and notify and self.s.get("mail_on",True) and self.s.get("owner"):
                 self.s.post(self.s.get("owner"),f"✉️ {src} · {x['sender']}\n{x['subject']}\n\n{x['body'] or 'Текст отсутствует.'}")
 
+    def statuses(self):
+        def status(key, enabled, missing):
+            if not enabled:
+                return {"ok":False, "detail":missing}
+            value = self.s.get(key+"_status", {"ok":False, "detail":"Ожидает первой проверки"})
+            return {**value, "detail": ("Подключено · " if value["ok"] else "Последняя проверка · ") + value["detail"]}
+        isu = status("isu", self.s.get("isu_connected"), "Войти можно кнопкой «Войти в ИСУ»")
+        if self.signing_in:
+            isu = {"ok":False,"detail":"Ожидаю входа в окне Chromium"}
+        return {"isu":isu, "mail":status("mail", self.imap.host and self.imap.user,
+                                        "Отдельный IMAP-ящик не настроен")}
+
     async def sync(self):
         if self.lock.locked():
             async with self.lock:
                 return
         async with self.lock:
             self.last = time.monotonic()
-            for src,enabled in (("ИСУ",self.s.get("isu_connected")),("Email",bool(self.imap.host and self.imap.user))):
-                if not enabled or (src == "ИСУ" and self.signing_in):
-                    continue
-                key = "isu" if src=="ИСУ" else "mail"
-                try:
-                    if src=="ИСУ":
-                        seen = self.s.get("isu_recent")
-                        items = await self.isu.read(set(seen) if seen else None)
-                        with self.s.db:
-                            self.record(src,reversed(items),seen is not None)
-                            if items or seen is None:
-                                self.s.set("isu_recent",[m["key"] for m in items[:20]])
-                    else:
-                        items,cursor,notify = await asyncio.to_thread(self.imap.read,self.s.get("imap_cursor"))
-                        with self.s.db:
-                            self.record(src,items,notify)
-                            self.s.set("imap_cursor",cursor)
-                    detail = "Проверено " + datetime.now(MSK).strftime("%d.%m в %H:%M МСК")
-                    ok = True
-                except Exception as exc:
-                    ok = False
-                    detail = str(exc) if isinstance(exc,SourceError) else "Проверь доступ к почте, сеть и настройки входа."
+            checks = []
+            if self.s.get("isu_connected") and not self.signing_in:
+                checks.append(self.sync_source("ИСУ"))
+            if self.imap.host and self.imap.user:
+                checks.append(self.sync_source("Email"))
+            await asyncio.gather(*checks)
+
+    async def sync_source(self, src):
+        key = "isu" if src=="ИСУ" else "mail"
+        try:
+            if src=="ИСУ":
+                seen = self.s.get("isu_recent")
+                items = await self.isu.read(set(seen) if seen is not None else None)
                 with self.s.db:
-                    self.s.set(key+"_status",dict(ok=ok,detail=detail))
+                    self.record(src,reversed(items),seen is not None)
+                    if items or seen is None:
+                        self.s.set("isu_recent",[m["key"] for m in items[:20]])
+            else:
+                items,cursor,notify = await asyncio.to_thread(self.imap.read,self.s.get("imap_cursor"))
+                with self.s.db:
+                    self.record(src,items,notify)
+                    self.s.set("imap_cursor",cursor)
+            detail = "Проверено " + datetime.now(MSK).strftime("%d.%m в %H:%M МСК")
+            ok = True
+        except Exception as exc:
+            ok = False
+            if isinstance(exc, imaplib.IMAP4.error):
+                detail = "IMAP отклонил запрос. Проверь папку, пароль приложения или вход Microsoft."
+            elif isinstance(exc, OSError):
+                detail = "Сервер почты недоступен. Проверка повторится автоматически."
+            else:
+                detail = str(exc) if isinstance(exc,SourceError) else "Проверь доступ к почте, сеть и настройки входа."
+        with self.s.db:
+            self.s.set(key+"_status",dict(ok=ok,detail=detail))
 
     async def run(self):
         while True:

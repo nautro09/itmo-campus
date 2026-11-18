@@ -218,3 +218,37 @@ class Portal:
                 if isinstance(e, SourceError):
                     raise
                 raise SourceError("Не удалось открыть личное расписание. Проверь сеть и подключение my.itmo.") from None
+
+    async def record_book(self):
+        async with self.lock:
+            try:
+                if not self.page or self.page.is_closed():
+                    await self.close()
+                    await self.open(headed=False)
+                await self.page.wait_for_function(READY, timeout=12000)
+                data = await self.page.evaluate("""async () => {
+                    if (location.origin !== 'https://my.itmo.ru') return null;
+                    const api = window.$nuxt.$store.$axios;
+                    const read = async path => {
+                        const {data} = await api.get(path, {timeout:12000});
+                        if (!Array.isArray(data.result) || Number(data.error_code || 0)) throw Error();
+                        return data.result;
+                    };
+                    const plans = await read('/api/record_book/specializations');
+                    let selected;
+                    for (const plan of plans) {
+                        for (const term of plan.semesters) {
+                            if (term.actual) { selected=[plan.main_plan,term.semester]; break; }
+                        }
+                    }
+                    if (!selected && plans[0]?.semesters?.length)
+                        selected=[plans[0].main_plan,plans[0].semesters[0].semester];
+                    if (!selected) return null;
+                    const scope=selected.map(encodeURIComponent).join('/');
+                    return [scope, await read('/api/record_book/'+scope)];
+                }""")
+                if not data:
+                    raise SourceError("БаРС пока не показал учебный план.")
+                return data
+            except BrowserError:
+                raise SourceError("Не удалось проверить БаРС. Проверь вход в my.itmo. Последние баллы сохранены.") from None

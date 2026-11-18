@@ -12,11 +12,12 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from itmo import MSK, Portal, SourceError
+from grades import Grades
 from monitor import Monitor
 from planner import BACK, HOME, MAIN, SETTINGS, TODAY, TOMORROW, Planner, pairs
 from store import Store
 from dotenv import load_dotenv
-from extras import draft_task, weekly_report
+from extras import campus_names, draft_task, weekly_report
 from inbox import IsuInbox
 from mailbox_sync import ENV, Mail
 from miniapp import start_web, state
@@ -67,6 +68,7 @@ class Bot:
         self.s = store
         self.plan = Planner(store)
         self.monitor = Monitor(store, portal)
+        self.grades = Grades(store, portal)
         self.portal = portal
         self.isu = IsuInbox(ROOT/"data"/"isu-browser")
         self.mail = Mail(store,self.isu)
@@ -88,6 +90,8 @@ class Bot:
         message = (f"⚙️ Настройки\n\nmy.itmo · {connected}\nПоследняя проверка · {last}\n"
                    f"Утренняя рассылка · {st.get('morning_time','07:30')+' МСК' if on else 'выключена'}\n"
                    f"Изменения на 7 дней · {str(interval)+' мин' if interval else 'проверка выключена'}")
+        for key, label in (("isu","Входящие ИСУ"), ("mail","Учебный IMAP")):
+            message += "\n" + label + " · " + self.mail.statuses()[key]["detail"]
         if st.get("source_error"):
             message += "\n\n" + st.get("source_error")
         toggle = "Выключить рассылку" if on else "Включить рассылку"
@@ -180,6 +184,9 @@ class Bot:
         name = screen["name"]
         if text in (HOME, "/start"):
             return self.plan.home()
+        if text == "📈 Баллы БаРС":
+            await self.grades.sync()
+            return self.plan.screen("grades", self.grades.report(), [["📈 Баллы БаРС"]])
         if text == FROM_TEXT:
             return self.plan.screen("from_text","Перешли сообщение преподавателя или отправь текст задания.",[[BACK]])
         if text==WEEK:
@@ -200,7 +207,7 @@ class Bot:
         if text=="Проверить почту" and name=="mail":
             await self.mail.sync()
             msg,rows=await self.route(MAIL)
-            details=[self.s.get(k,{}).get("detail") for k in ("isu_status","mail_status")]
+            details=[label+" · "+self.mail.statuses()[key]["detail"] for label,key in (("ИСУ","isu"),("IMAP","mail"))]
             return msg+"\n"+("\n".join(filter(None,details)) or "Подключи ИСУ или заполни IMAP в .env."),rows
         if name=="mail" and text.startswith("✉ ") and text.split()[1].isdigit():
             item=self.s.db.execute("SELECT * FROM mail WHERE id=?",(int(text.split()[1]),)).fetchone()
@@ -230,7 +237,26 @@ class Bot:
             d["title"]=text
             return self.plan.screen("draft",f"{text}\n{d['due'] or 'Выбери срок'}",[["Сохранить черновик","Изменить срок"],[BACK]],draft=d)
         if text=="🚶 Дорога" and name=="settings":
-            return self.plan.screen("travel","Сколько минут обычно занимает дорога до корпуса? Можно ввести число от 1 до 240.",[["20","35","50"],["Выключить напоминание"],[BACK]])
+            return self.plan.screen("travel","Сколько минут обычно занимает дорога до корпуса? Можно ввести число от 1 до 240.",[["20","35","50"],["По корпусам"],["Выключить напоминание"],[BACK]])
+        if (name=="travel" and text=="По корпусам") or (name=="campus_time" and text==BACK):
+            names = campus_names(self.s)
+            return self.plan.screen("campuses", "Выбери корпус из расписания." if names else "Корпуса появятся после загрузки очных пар.",
+                                    [[building] for building in names]+[[BACK]], buildings=names)
+        if name=="campuses" and text in screen.get("buildings",[]):
+            minutes = self.s.get("campus_minutes",{}).get(text,self.s.get("travel_minutes",35))
+            return self.plan.screen("campus_time", f"{text} · сейчас {minutes} мин. Введи от 1 до 240 минут.",
+                                    [["20","35","50"],["Общее время"],[BACK]],building=text)
+        if name=="campus_time":
+            values = self.s.get("campus_minutes",{})
+            if text=="Общее время":
+                values.pop(screen["building"],None)
+            elif text.isdecimal() and 1<=int(text)<=240:
+                values[screen["building"]] = int(text)
+                self.s.set("travel_on",True)
+            else:
+                return "Введи число от 1 до 240.",self.s.get("keyboard",MAIN)
+            self.s.set("campus_minutes",values)
+            return self.settings()
         if name=="travel" and (text=="Выключить напоминание" or text.isdecimal() and 1<=int(text)<=240):
             self.s.set("travel_on",text!="Выключить напоминание")
             if text.isdecimal():
@@ -245,7 +271,7 @@ class Bot:
             return self.settings()
         if text=="🔎 Проверить связь":
             return self.start_check(report=True), self.s.get("keyboard",MAIN)
-        if text == SETTINGS or (text == BACK and name in ("interval","clock","travel","weekly")):
+        if text == SETTINGS or (text == BACK and name in ("interval","clock","travel","weekly","campuses")):
             return self.settings()
         if text in (TODAY,TOMORROW):
             if not self.s.get("connected"):
@@ -401,7 +427,7 @@ async def main():
     if not store.get("owner"):
         print(f"Код привязки для первого входа: {bot.pair_code}", flush=True)
     try:
-        await asyncio.gather(poll(api, bot), deliver(api,store), clock(bot.monitor),bot.mail.run(),serve_menu(api,store))
+        await asyncio.gather(poll(api, bot), deliver(api,store), clock(bot.monitor),bot.mail.run(),bot.grades.run(),serve_menu(api,store))
     finally:
         if bot.login_job and not bot.login_job.done():
             bot.login_job.cancel()

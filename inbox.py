@@ -14,7 +14,7 @@ ISU = "https://isu.ifmo.ru"
 ROWS = """rows => rows.map(row => {
     const text = selector => row.querySelector(selector)?.textContent.trim() ?? null;
     return {key:row.dataset.id,sender:text('.mes_name .name_text'),subject:text('.text_h'),
-            body:text('.text_text'),date:text('.mes_date')};
+            body:text('.text_text') || '',date:text('.mes_date')};
 })"""
 
 
@@ -35,6 +35,7 @@ class IsuInbox:
     def __init__(self, profile):
         self.profile = Path(profile)
         self.checkpoint = self.profile / "isu-session.json"
+        self.saved_session = None
         self.frame = None
         self.lock = asyncio.Lock()
         self.engine = self.context = self.page = None
@@ -74,12 +75,16 @@ class IsuInbox:
 
     async def save_session(self):
         cookies = await self.context.cookies()
+        session = {"url": self.frame.url, "cookies": cookies}
+        if self.saved_session == session and self.checkpoint.exists():
+            return
         with NamedTemporaryFile(dir=self.profile, mode="w", encoding="utf-8", delete=False) as tmp:
             try:
-                json.dump({"url": self.frame.url, "cookies": cookies}, tmp)
+                json.dump(session, tmp)
                 tmp.flush()
                 os.fsync(tmp.fileno())
                 os.replace(tmp.name, self.checkpoint)
+                self.saved_session = session
             finally:
                 Path(tmp.name).unlink(missing_ok=True)
 
@@ -146,6 +151,11 @@ class IsuInbox:
                 await self.reach_inbox(False)
                 await self.save_session()
                 rows = self.frame.locator("#tet .message[data-id]")
+                # Most polls see the same messages. Read only IDs before parsing bodies.
+                if seen:
+                    keys = await rows.evaluate_all("rows => rows.map(row => row.dataset.id)")
+                    if keys and all(key in seen for key in keys):
+                        return []
                 while True:
                     items = await rows.evaluate_all(ROWS)
                     if any(not x["key"] or any(x[k] is None for k in ("sender","body","subject","date")) for x in items):

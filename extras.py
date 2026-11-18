@@ -67,6 +67,18 @@ def weekly_report(store, start, week=None):
     return "\n".join(text)
 
 
+def onsite(lesson):
+    description = " ".join(str(lesson.get(k) or "") for k in ("format", "work_type", "building"))
+    return not re.search(r"онлайн|дистанц|online|виртуальн|remote", description, re.I)
+
+
+def campus_names(store):
+    buildings = set(store.get("campus_minutes", {}))
+    for day in store.get("cache", {}).values():
+        buildings.update(x["building"] for x in day["lessons"] if x.get("building") and onsite(x))
+    return sorted(buildings)
+
+
 def departure(store, now):
     today = now.date().isoformat()
     entry = store.get("cache",{}).get(today)
@@ -74,11 +86,10 @@ def departure(store, now):
         return
     if today not in store.get("latest_dates",[]) or entry["checked"][:10] != today:
         return
-    onsite = [x for x in entry["lessons"] if not any(w in (x["format"]+" "+x["building"]).lower()
-              for w in ("онлайн", "дистанц", "online", "виртуальн"))]
-    if not onsite:
+    lessons = [x for x in entry["lessons"] if onsite(x)]
+    if not lessons:
         return
-    first = min(onsite, key=lambda x:x["time_start"])
+    first = min(lessons, key=lambda x:x["time_start"])
     begins = datetime.fromisoformat(today+"T"+first["time_start"]).replace(tzinfo=MSK)
     minutes = store.get("travel_minutes",35)
     campuses = store.get("campus_minutes",{})
