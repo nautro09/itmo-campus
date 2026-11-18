@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="ru.para.wake.test">
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35"/>
+    <application android:label="Wake test"/>
+    <instrumentation android:name="ru.para.wake.AlarmCheck" android:targetPackage="ru.para.wake"/>
+</manifest>

@@ -14,3 +14,12 @@ mkdir "$build/assets"
 cp assets/wake.wav "$build/assets/"
 (cd "$build" && zip -q base.apk classes.dex && zip -0q base.apk assets/wake.wav)
 "$BUILD_TOOLS/zipalign" -f 4 "$build/base.apk" "${APK_OUT:-$PWD/para-unsigned.apk}"
+if [ -n "${TEST_APK_OUT:-}" ]; then
+    mkdir "$build/test" "$build/testdex"
+    javac -encoding UTF-8 -source 8 -target 8 -bootclasspath "$ANDROID_JAR:$BUILD_TOOLS/core-lambda-stubs.jar" -classpath "$build/program.jar" -d "$build/test" test/AlarmCheck.java
+    jar cf "$build/test.jar" -C "$build/test" .
+    "$BUILD_TOOLS/d8" --min-api 29 --lib "$ANDROID_JAR" --classpath "$build/program.jar" --output "$build/testdex" "$build/test.jar"
+    "$BUILD_TOOLS/aapt2" link -I "$ANDROID_JAR" --manifest test/AndroidManifest.xml -o "$build/testdex/test.apk"
+    (cd "$build/testdex" && zip -q test.apk classes.dex)
+    "$BUILD_TOOLS/zipalign" -f 4 "$build/testdex/test.apk" "$TEST_APK_OUT"
+fi

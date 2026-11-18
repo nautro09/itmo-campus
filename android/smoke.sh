@@ -26,3 +26,5 @@ tap_button 'Проверить звук · 10 секунд'
 sleep 1
 adb shell dumpsys activity services ru.para.wake | grep -q 'ru.para.wake/.Ring'
 tap_button 'Выключить звонок'
+adb install -t android/test.apk
+adb shell am instrument -w ru.para.wake.test/ru.para.wake.AlarmCheck | grep -F 'alarm lifecycle passed'
