@@ -34,6 +34,7 @@ class Store:
             columns = {row[1] for row in self.db.execute("PRAGMA table_info(outbox)")}
             if "delivery" not in columns:
                 self.db.execute("ALTER TABLE outbox ADD COLUMN delivery TEXT NOT NULL DEFAULT 'direct'")
+            self.db.execute("CREATE INDEX IF NOT EXISTS outbox_delivery ON outbox(delivery,id)")
             self.db.executemany("INSERT OR IGNORE INTO categories VALUES (?)",
                                 [(v,) for v in ("Учёба", "Лабораторные", "Проекты", "Личное")])
 

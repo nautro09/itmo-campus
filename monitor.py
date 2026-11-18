@@ -97,7 +97,7 @@ class Monitor:
             # Retry an incomplete morning even when change alerts are disabled.
             if elapsed >= 300:
                 return True
-        if self.s.get("travel_on",False) and elapsed>=600:
+        if (self.s.get("travel_on",False) or self.s.get("wake_on",False)) and elapsed>=600:
             return True
         return bool(interval and elapsed >= interval * 60)
 

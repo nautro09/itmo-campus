@@ -8,12 +8,13 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 
 from aiohttp import web
+import wake
 from extras import campus_names, draft_task, weekly_report
 from itmo import MSK
 from planner import REMIND
 
 WEB = Path(__file__).resolve().parent/"web"
-DEFAULTS = dict(quiet_on=True,quiet_start="23:00",quiet_end="07:00",quiet_first=True,theme="paper",morning_on=True,morning_time="07:30",interval=1,travel_on=False,
+DEFAULTS = dict(**wake.DEFAULTS,quiet_on=True,quiet_start="23:00",quiet_end="07:00",quiet_first=True,theme="paper",morning_on=True,morning_time="07:30",interval=1,travel_on=False,
                 travel_minutes=35,campus_minutes={},weekly_on=True,mail_on=True)
 
 
@@ -36,6 +37,17 @@ def authorized(raw, token, owner, now=None):
         return False
 
 
+def services(bot):
+    s = bot.s
+    checked = s.get("last_check")
+    available = bool(checked and not s.get("source_error"))
+    statuses = {"itmo":{"ok":available,"detail":s.get("source_error") or
+                ("Проверено "+datetime.fromisoformat(checked).strftime("%d.%m в %H:%M МСК") if checked else "Ожидает подключения")},
+                "telegram":s.get("telegram_status",{"ok":False,"detail":"Ещё не проверено"})}
+    statuses.update(bot.mail.statuses())
+    return statuses
+
+
 def state(bot):
     s = bot.s
     now = datetime.now(MSK)
@@ -44,17 +56,14 @@ def state(bot):
     by_id = {t["id"]:t for t in tasks}
     for row in s.db.execute("SELECT id,task_id,title,done FROM steps ORDER BY id"):
         by_id[row["task_id"]]["steps"].append(dict(row,done=bool(row["done"])))
-    checked = s.get("last_check")
-    available = bool(checked and not s.get("source_error"))
-    statuses = {"itmo":{"ok":available,"detail":s.get("source_error") or
-                ("Проверено "+datetime.fromisoformat(checked).strftime("%d.%m в %H:%M МСК") if checked else "Ожидает подключения")},
-                "telegram":s.get("telegram_status",{"ok":False,"detail":"Ещё не проверено"})}
-    statuses.update(bot.mail.statuses())
+    statuses = services(bot)
+    cache = s.get("cache", {})
+    stale = bool(s.get("source_error"))
     latest = set(s.get("latest_dates", []))
     pending = bot.check_job is not None and not bot.check_job.done()
-    return dict(campuses=campus_names(s), bars=bot.grades.report(), check_pending=pending, today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
+    return dict(wake_status=wake.status(s), campuses=campus_names(s,cache), bars=bot.grades.report(), check_pending=pending, today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
                 settings={k:s.get(k,v) for k,v in DEFAULTS.items()},services=statuses,
-                days=[dict(date=d,lessons=item["lessons"],checked=item["checked"],stale=bool(s.get("source_error") or d not in latest or item["checked"][:10]!=now.date().isoformat())) for d,item in sorted(s.get("cache",{}).items()) if d>=now.date().isoformat()],
+                days=[dict(date=d,lessons=item["lessons"],checked=item["checked"],stale=bool(stale or d not in latest or item["checked"][:10]!=now.date().isoformat())) for d,item in sorted(cache.items()) if d>=now.date().isoformat()],
                 tasks=tasks,categories=[r[0] for r in s.db.execute("SELECT name FROM categories ORDER BY name")],
                 mail=[dict(r) for r in s.db.execute("SELECT id,source,subject,sender,date,body FROM mail ORDER BY id DESC LIMIT 100")],
                 warning=s.get("source_error") or "")
@@ -94,6 +103,10 @@ def save_settings(store, values):
             if not isinstance(v,dict) or len(v)>100:
                 raise ValueError("Проверь список корпусов.")
             v={field(building,256):integer(minutes,1,240) for building,minutes in v.items()}
+        elif k=="wake_rules":
+            wake.rules(v)
+        elif k in ("wake_prep","wake_online"):
+            integer(v,0,240)
         elif k=="travel_minutes":
             integer(v,1,240)
         store.set(k,v)
@@ -164,6 +177,13 @@ async def action(bot, kind, data):
             await bot.mail.sync()
         if kind=="mail_check" and not (s.get("isu_connected") or bot.mail.imap.host):
             notice="Подключи входящие ИСУ или заполни настройки почты в .env."
+    elif kind in ("wake_pair","wake_revoke"):
+        with s.db:
+            if kind=="wake_pair":
+                notice=wake.pair_text(s)
+            else:
+                wake.revoke(s)
+                notice="Доступ телефона отозван."
     elif kind=="bars_check":
         await bot.grades.sync()
         notice=bot.grades.report()
@@ -191,12 +211,17 @@ def application(bot,token):
             data=await request.json()
             if not isinstance(data,dict):
                 raise ValueError()
-            result=state(bot) if request.path=="/api/state" else await action(bot,data.pop("action"),data)
+            if request.path=="/api/services":
+                result={"services":services(bot), "check_pending":bot.check_job is not None and not bot.check_job.done()}
+            else:
+                result=state(bot) if request.path=="/api/state" else await action(bot,data.pop("action"),data)
             return web.json_response(result)
         except (ValueError,KeyError,TypeError,OverflowError):
             return web.json_response({"error":"Проверь поля или обнови страницу и повтори действие."},status=400)
+    wake.register(app,bot.s)
     app.router.add_get("/",asset)
     app.router.add_get("/{asset:index\\.html|app\\.js|app\\.css}",asset)
+    app.router.add_post("/api/services",api)
     app.router.add_post("/api/state",api)
     app.router.add_post("/api/action",api)
     return app

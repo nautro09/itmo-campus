@@ -3,6 +3,8 @@ services:
     build: .
     image: itmo-campus:local
     init: true
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     user: "${CAMPUS_UID:-1000}:${CAMPUS_GID:-1000}"
     shm_size: 1gb

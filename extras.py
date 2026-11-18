@@ -72,9 +72,9 @@ def onsite(lesson):
     return not re.search(r"онлайн|дистанц|online|виртуальн|remote", description, re.I)
 
 
-def campus_names(store):
+def campus_names(store, cache=None):
     buildings = set(store.get("campus_minutes", {}))
-    for day in store.get("cache", {}).values():
+    for day in (cache if cache is not None else store.get("cache", {})).values():
         buildings.update(x["building"] for x in day["lessons"] if x.get("building") and onsite(x))
     return sorted(buildings)
 

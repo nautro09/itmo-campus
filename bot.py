@@ -22,6 +22,8 @@ from inbox import IsuInbox
 from mailbox_sync import ENV, Mail
 from miniapp import start_web, state
 from menu import serve_menu
+import wake
+from miniapp import save_settings
 from planner import FROM_TEXT, MAIL, WEEK
 
 ROOT = Path(__file__).resolve().parent
@@ -96,7 +98,7 @@ class Bot:
             message += "\n\n" + st.get("source_error")
         toggle = "Выключить рассылку" if on else "Включить рассылку"
         return self.plan.screen("settings", message, [[LOGIN,"🔑 Войти в ИСУ"], [CLOCK, toggle], [INTERVAL],
-                              ["🚶 Дорога", "🗓 Сводка по воскресеньям"],["🌙 Тихие часы","🔎 Проверить связь"]])
+                              ["🚶 Дорога", "🗓 Сводка по воскресеньям"],["🌙 Тихие часы","⏰ Будильник"],["🔎 Проверить связь"]])
 
     def begin_login(self, isu=False):
         if isu:
@@ -269,6 +271,31 @@ class Bot:
         if name=="weekly" and text in ("Включить сводку","Выключить сводку"):
             self.s.set("weekly_on",text=="Включить сводку")
             return self.settings()
+        if text=="⏰ Будильник" or name in ("wake","wake_input") and text not in (BACK, HOME):
+            notice = ""
+            fields = {"Время сборов":"wake_prep","До онлайн-пары":"wake_online","Правила подъёма":"wake_rules"}
+            try:
+                if name=="wake_input" and text!="⏰ Будильник":
+                    field = screen["field"]
+                    value = ("" if text=="Сбросить правила" else text) if field=="wake_rules" else int(text)
+                    save_settings(self.s,{field:value})
+                elif text in fields:
+                    message = "Введи правила через запятую, например 08:10=06:20, 09:50=08:30." if text=="Правила подъёма" else "Введи число минут от 0 до 240."
+                    return self.plan.screen("wake_input",message,([["Сбросить правила"]] if text=="Правила подъёма" else [["20","40","60"]])+[[BACK]],field=fields[text])
+                elif text=="Привязать Honor":
+                    notice=wake.pair_text(self.s)
+                elif text=="Отозвать доступ":
+                    wake.revoke(self.s)
+                elif text=="Переключить будильник":
+                    self.s.set("wake_on",not self.s.get("wake_on",False))
+            except ValueError as err:
+                return str(err) if not str(err).startswith("invalid literal") else "Введи число минут.",self.s.get("keyboard",MAIN)
+            mode="включён" if self.s.get("wake_on",False) else "выключен"
+            details = (f"Будильник {mode}. Сборы: {self.s.get('wake_prep',40)} мин + дорога до корпуса. "
+                       f"Онлайн: за {self.s.get('wake_online',20)} мин. Правила для очных пар: "
+                       f"{self.s.get('wake_rules',wake.DEFAULTS['wake_rules']) or 'нет'}.")
+            return self.plan.screen("wake",details+"\n"+wake.status(self.s)+"\n"+notice,
+                [["Переключить будильник","Привязать Honor"],["Время сборов","До онлайн-пары"],["Правила подъёма","Отозвать доступ"],[BACK]])
         if text=="🌙 Тихие часы" or (name=="quiet" and text!=BACK):
             if name=="quiet" and text!="🌙 Тихие часы":
                 if text=="Переключить режим":
@@ -290,7 +317,7 @@ class Bot:
                 [["23:00-07:00","22:00-08:00"],["Переключить режим","Исключение первой пары"],[BACK]])
         if text=="🔎 Проверить связь":
             return self.start_check(report=True), self.s.get("keyboard",MAIN)
-        if text == SETTINGS or (text == BACK and name in ("interval","clock","travel","weekly","campuses","quiet")):
+        if text == SETTINGS or (text == BACK and name in ("interval","clock","travel","weekly","campuses","quiet","wake","wake_input")):
             return self.settings()
         if text in (TODAY,TOMORROW):
             if not self.s.get("connected"):
@@ -385,7 +412,7 @@ async def deliver(api, store):
     while True:
         item = store.next_delivery()
         if not item:
-            await asyncio.sleep(.3)
+            await asyncio.sleep(1)
             continue
         args = {"chat_id":item["chat"], "text":item["text"], "link_preview_options":{"is_disabled":True}}
         if item["keyboard"]:

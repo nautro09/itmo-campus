@@ -36,6 +36,8 @@ async def serve_menu(api, store):
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
                 target = await asyncio.wait_for(tunnel_url(process.stderr), 60)
             await register_menu(api, target, store.get("owner"))
+            with store.db:
+                store.set("wake_origin",target.rstrip("/"))
             print("Кнопка «Открыть Пару» установлена в Telegram.", flush=True)
             if not process:
                 return
