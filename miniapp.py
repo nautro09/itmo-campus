@@ -13,7 +13,7 @@ from itmo import MSK
 from planner import REMIND
 
 WEB = Path(__file__).resolve().parent/"web"
-DEFAULTS = dict(theme="paper",morning_on=True,morning_time="07:30",interval=1,travel_on=False,
+DEFAULTS = dict(quiet_on=True,quiet_start="23:00",quiet_end="07:00",quiet_first=True,theme="paper",morning_on=True,morning_time="07:30",interval=1,travel_on=False,
                 travel_minutes=35,campus_minutes={},weekly_on=True,mail_on=True)
 
 
@@ -84,7 +84,7 @@ def save_settings(store, values):
     for k,v in values.items():
         if type(DEFAULTS[k]) is bool:
             boolean(v)
-        elif k=="morning_time":
+        elif k in ("morning_time","quiet_start","quiet_end"):
             v=datetime.strptime(field(v,5),"%H:%M").strftime("%H:%M")
         elif k=="theme" and v not in ("paper","night","mint"):
             raise ValueError("Выбери одну из трёх тем.")
@@ -97,6 +97,8 @@ def save_settings(store, values):
         elif k=="travel_minutes":
             integer(v,1,240)
         store.set(k,v)
+    if store.get("quiet_start","23:00")==store.get("quiet_end","07:00"):
+        raise ValueError("Начало и конец тихих часов должны различаться.")
 
 
 def change_task(db,action,p):

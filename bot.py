@@ -96,7 +96,7 @@ class Bot:
             message += "\n\n" + st.get("source_error")
         toggle = "Выключить рассылку" if on else "Включить рассылку"
         return self.plan.screen("settings", message, [[LOGIN,"🔑 Войти в ИСУ"], [CLOCK, toggle], [INTERVAL],
-                              ["🚶 Дорога", "🗓 Сводка по воскресеньям"],["🔎 Проверить связь"]])
+                              ["🚶 Дорога", "🗓 Сводка по воскресеньям"],["🌙 Тихие часы","🔎 Проверить связь"]])
 
     def begin_login(self, isu=False):
         if isu:
@@ -269,9 +269,28 @@ class Bot:
         if name=="weekly" and text in ("Включить сводку","Выключить сводку"):
             self.s.set("weekly_on",text=="Включить сводку")
             return self.settings()
+        if text=="🌙 Тихие часы" or (name=="quiet" and text!=BACK):
+            if name=="quiet" and text!="🌙 Тихие часы":
+                if text=="Переключить режим":
+                    self.s.set("quiet_on",not self.s.get("quiet_on",True))
+                elif text=="Исключение первой пары":
+                    self.s.set("quiet_first",not self.s.get("quiet_first",True))
+                else:
+                    try:
+                        start,end = [datetime.strptime(v.strip(),"%H:%M").strftime("%H:%M") for v in text.replace("–","-").split("-")]
+                        if start==end:
+                            raise ValueError()
+                    except ValueError:
+                        return "Введи интервал, например 23:00-07:00.",self.s.get("keyboard",MAIN)
+                    self.s.set("quiet_start",start)
+                    self.s.set("quiet_end",end)
+            mode = "включены" if self.s.get("quiet_on",True) else "выключены"
+            exception = "сразу" if self.s.get("quiet_first",True) else "в сводке"
+            return self.plan.screen("quiet",f"🌙 Тихие часы {mode} · {self.s.get('quiet_start','23:00')}–{self.s.get('quiet_end','07:00')} МСК. Изменения ближайшей первой пары — {exception}. Введи свой интервал или выбери ниже.",
+                [["23:00-07:00","22:00-08:00"],["Переключить режим","Исключение первой пары"],[BACK]])
         if text=="🔎 Проверить связь":
             return self.start_check(report=True), self.s.get("keyboard",MAIN)
-        if text == SETTINGS or (text == BACK and name in ("interval","clock","travel","weekly","campuses")):
+        if text == SETTINGS or (text == BACK and name in ("interval","clock","travel","weekly","campuses","quiet")):
             return self.settings()
         if text in (TODAY,TOMORROW):
             if not self.s.get("connected"):
@@ -364,7 +383,7 @@ async def poll(api, bot):
 
 async def deliver(api, store):
     while True:
-        item = store.db.execute("SELECT * FROM outbox ORDER BY id LIMIT 1").fetchone()
+        item = store.next_delivery()
         if not item:
             await asyncio.sleep(.3)
             continue

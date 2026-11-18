@@ -97,5 +97,5 @@ def departure(store, now):
     signature = [today,first["time_start"],first["building"]]
     if begins-timedelta(minutes=minutes) <= now < begins and store.get("departure_sent") != signature:
         store.post(store.get("owner"),f"🚶 Пора выходить · {first['subject']}\nНачало в {first['time_start']}. "
-                   f"{first['building'] or 'Адрес не указан'} · дорога {minutes} мин.")
+                   f"{first['building'] or 'Адрес не указан'} · дорога {minutes} мин.", delivery="background")
         store.set("departure_sent",signature)

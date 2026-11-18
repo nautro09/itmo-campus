@@ -82,7 +82,7 @@ def day_text(week, day):
     return heading + "\n\n" + ("\n\n".join(lesson_text(x) for x in week[key]) or "Пар нет.")
 
 
-def changes(before, after):
+def changes(before, after, *, include_lessons=False):
     # Compare only dates covered in both responses. A sliding window or missing day
     # is not a cancellation. Ignore row order and changes to internal IDs alone.
     dates = sorted(before.keys() & after.keys())
@@ -116,12 +116,12 @@ def changes(before, after):
         for key in sorted(a.keys() & b.keys()):
             if len(a[key]) == len(b[key]) == 1:
                 x, y = a[key][0], b[key][0]
-                edits.append("✏️ Изменили пару\nБыло  " + when(x) + "\nСтало  " + when(y))
+                edits.append(((x, y), "✏️ Изменили пару\nБыло  " + when(x) + "\nСтало  " + when(y)))
                 left.remove(x)
                 right.remove(y)
-    edits.extend("➖ Убрали из расписания\n" + when(x) for x in left)
-    edits.extend("➕ Добавили пару\n" + when(x) for x in right)
-    return edits
+    edits.extend(((x,), "➖ Убрали из расписания\n" + when(x)) for x in left)
+    edits.extend(((x,), "➕ Добавили пару\n" + when(x)) for x in right)
+    return edits if include_lessons else [text for _, text in edits]
 
 
 class Portal:

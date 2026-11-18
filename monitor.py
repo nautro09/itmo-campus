@@ -27,17 +27,30 @@ class Monitor:
                 with self.s.db:
                     self.s.set("source_error", str(e))
                     if not self.s.get("warned"):
-                        self.s.post(chat, "⚠️ Не удалось обновить расписание. " + str(e))
+                        self.s.post(chat, "⚠️ Не удалось обновить расписание. " + str(e), delivery="background")
                         self.s.set("warned", True)
                 return
             cached = self.s.get("cache", {})
             old = {d:item["lessons"] for d, item in cached.items()}
-            edits = changes(old, week) if self.s.get("interval", 1) else []
+            edits = changes(old, week, include_lessons=True) if self.s.get("interval", 1) else []
             with self.s.db:
                 if edits:
-                    self.s.post(chat, "🔔 Изменения в расписании\n\n" + "\n\n".join(edits))
+                    first = set()
+                    for days in (old, week):
+                        for date, lessons in days.items():
+                            if not lessons or date not in (now.date().isoformat(), (now.date()+timedelta(days=1)).isoformat()):
+                                continue
+                            start = min(x["time_start"] for x in lessons)
+                            if date > now.date().isoformat() or start >= now.strftime("%H:%M"):
+                                first.add((date,start))
+                    groups = {}
+                    for affected, text in edits:
+                        urgent = any((x["day"],x["time_start"]) in first for x in affected)
+                        groups.setdefault("first" if urgent else "background", []).append(text)
+                    for delivery, texts in groups.items():
+                        self.s.post(chat, "🔔 Изменения в расписании\n\n" + "\n\n".join(texts), delivery=delivery)
                 if self.s.get("warned"):
-                    self.s.post(chat, "Проверка расписания снова работает.")
+                    self.s.post(chat, "Проверка расписания снова работает.", delivery="background")
                 for day, lessons in week.items():
                     cached[day] = {"lessons":lessons, "checked":now.isoformat()}
                 self.s.set("cache", {d:v for d,v in cached.items() if d >= now.date().isoformat()})
@@ -49,7 +62,7 @@ class Monitor:
                     self.s.set("profile", self.portal.identity)
                 if self.morning_due(now) and (now.date().isoformat() in week or
                                               self.s.get("morning_partial") != now.date().isoformat()):
-                    self.s.post(chat, "☀️ Доброе утро!\n\n" + self.show_day(now.date()))
+                    self.s.post(chat, "☀️ Доброе утро!\n\n" + self.show_day(now.date()), delivery="background")
                     if now.date().isoformat() in week:
                         self.s.set("morning_sent", now.date().isoformat())
                     else:
@@ -98,14 +111,14 @@ class Monitor:
                 due = datetime.fromisoformat(t["due"]).replace(tzinfo=MSK)
                 if now >= due - timedelta(minutes=t["lead"]):
                     title = "Срок прошёл" if now > due + timedelta(minutes=1) else "Напоминание"
-                    self.s.post(chat, f"⏰ {title} · #{t['id']}\n{t['title']}\n{t['category']} · {due:%d.%m.%Y в %H:%M} МСК")
+                    self.s.post(chat, f"⏰ {title} · #{t['id']}\n{t['title']}\n{t['category']} · {due:%d.%m.%Y в %H:%M} МСК", delivery="background")
                     self.s.db.execute("UPDATE tasks SET reminded=1 WHERE id=?", (t["id"],))
         if self.should_fetch(now):
             await self.fetch(automatic=True)
             with self.s.db:
                 key = now.date().isoformat()
                 if self.morning_due(now) and self.s.get("source_error") and self.s.get("morning_partial") != key:
-                    self.s.post(chat, "☀️ Утреннее расписание\n\n" + self.show_day(now.date()))
+                    self.s.post(chat, "☀️ Утреннее расписание\n\n" + self.show_day(now.date()), delivery="background")
                     self.s.set("morning_partial", key)
         with self.s.db:
             departure(self.s,now)
@@ -118,5 +131,5 @@ class Monitor:
                 except SourceError:
                     pass
             with self.s.db:
-                self.s.post(chat,weekly_report(self.s,start,week))
+                self.s.post(chat,weekly_report(self.s,start,week), delivery="background")
                 self.s.set("weekly_sent",now.date().isoformat())
