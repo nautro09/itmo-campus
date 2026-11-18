@@ -15,6 +15,17 @@ public class AlarmCheck extends Instrumentation {
         Bundle result=new Bundle();
         Context c=getTargetContext();
         try{
+            if(c.getPackageManager().getReceiverInfo(new android.content.ComponentName(c,Events.class),0).exported)
+                throw new AssertionError("exported alarm receiver");
+            Activity ui=startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            ui.startForegroundService(new Intent(c,Ring.class).setAction("TEST"));
+            Thread.sleep(1800);
+            android.app.ActivityManager activityManager=c.getSystemService(android.app.ActivityManager.class);
+            boolean ringing=false;
+            for(android.app.ActivityManager.RunningServiceInfo info:activityManager.getRunningServices(100))
+                if(info.foreground && info.service.getClassName().equals(Ring.class.getName())) ringing=true;
+            if(!ringing) throw new AssertionError("ring service");
+            c.stopService(new Intent(c,Ring.class));
             LocalDate today=LocalDate.now(Alarms.MOSCOW);
             JSONArray days=new JSONArray();
             JSONObject first=new JSONObject().put("day",today.toString()).put("action","set");
