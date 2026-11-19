@@ -232,5 +232,10 @@ def application(bot,token):
 async def start_web(bot,token):
     runner=web.AppRunner(application(bot,token),access_log=None)
     await runner.setup()
-    await web.TCPSite(runner,os.getenv("WEB_HOST") or "127.0.0.1",int(os.getenv("WEB_PORT") or 8787)).start()
+    if "PARA_WEB_FD" in os.environ:
+        import socket
+        listener = socket.socket(fileno=int(os.environ["PARA_WEB_FD"]))
+        await web.SockSite(runner,listener).start()
+    else:
+        await web.TCPSite(runner,os.getenv("WEB_HOST") or "127.0.0.1",int(os.getenv("WEB_PORT") or 8787)).start()
     return runner

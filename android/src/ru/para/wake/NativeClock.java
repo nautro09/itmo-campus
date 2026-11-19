@@ -71,6 +71,7 @@ final class NativeClock {
         boolean changed=!revision.equals(p.getString("revision",""));
         SharedPreferences.Editor edit=p.edit().putString("proposal",row.toString()).putString("revision",revision)
             .putLong("lastReceived",System.currentTimeMillis()).putLong("checkedAt",plan.optLong("checked_at"))
+            .putBoolean("legacyServer",!plan.has("checked_at"))
             .remove("syncIssue").remove("syncBlocked").remove("ackIssue");
         if(plan.has("settings")) edit.putString("settings",plan.getJSONObject("settings").toString());
         String bot=plan.optString("bot");

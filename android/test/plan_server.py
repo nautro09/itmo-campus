@@ -15,7 +15,7 @@ store = Store(":memory:")
 now = datetime.now(MSK)
 tomorrow = (now.date() + timedelta(days=1)).isoformat()
 code = "abcdefghijklmnopqrstuvwx"
-site = "https://localhost:18787"
+site = "https://127.0.0.1:18787"
 with store.db:
     store.set("wake_on", True)
     store.set("wake_rules", "08:10=06:20, 09:50=08:30, 13:30=11:00")

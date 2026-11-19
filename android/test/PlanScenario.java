@@ -11,7 +11,7 @@ import javax.net.ssl.*;
 import org.json.JSONObject;
 
 final class PlanScenario {
-    static final String SITE="https://localhost:18787";
+    static final String SITE="https://127.0.0.1:18787";
     static final String CODE="abcdefghijklmnopqrstuvwx";
     static void check(boolean ok,String detail){if(!ok)throw new AssertionError(detail);}
     static void connect(Context c,String cert) throws Exception {
@@ -43,7 +43,7 @@ final class PlanScenario {
         step("reschedule");Link.sync(c);
         JSONObject newPlan=NativeClock.current(c);
         check(NativeClock.time(newPlan).equals("07:45") && !rev.equals(p.getString("revision","")),"changed rule");
-        p.edit().putString("site","https://localhost:18789").commit();
+        p.edit().putString("site","https://127.0.0.1:18789").commit();
         try{Link.sync(c);throw new AssertionError("offline");}catch(IOException expected){}
         check(!p.getString("syncIssue","").isEmpty() && NativeClock.usable(p,newPlan,Instant.now()),"offline set plan");
         check(!NativeClock.usable(p,newPlan,Instant.now().plusSeconds(13*3600)),"expired cached plan");

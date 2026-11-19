@@ -14,4 +14,4 @@ fi
 .venv/bin/python -m pip install --disable-pip-version-check -r requirements.txt
 export PLAYWRIGHT_BROWSERS_PATH="$PWD/.browsers"
 .venv/bin/python -m playwright install chromium
-exec .venv/bin/python bot.py
+exec .venv/bin/python local_host.py

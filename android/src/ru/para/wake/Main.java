@@ -3,7 +3,6 @@ package ru.para.wake;
 import android.app.*;
 import android.app.job.JobScheduler;
 import android.content.*;
-import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.*;
 import android.text.InputType;
@@ -165,6 +164,7 @@ public class Main extends Activity {
         String issue=prefs.getString("syncIssue","");
         ui.line(box,"Последний план · "+stamp(prefs.getLong("lastReceived",0)),15,MUTED,false,8);
         if(!issue.isEmpty())ui.line(box,issue,15,INK,false,8);
+        if(prefs.getBoolean("legacyServer",false))ui.line(box,"На сервере прежняя версия расчёта. Обнови бота до 4.1.",15,INK,false,8);
         if(!backgroundReady)ui.line(box,"Android отложил фоновую проверку.",14,MUTED,false,6);
         if(details){
             ui.line(box,"Последний запрос · "+stamp(prefs.getLong("lastAttempt",0)),14,MUTED,false,6);
@@ -243,7 +243,8 @@ public class Main extends Activity {
             }).show();
     }
     private void retry(){
-        prefs.edit().remove("blockedRev").remove("retryAfter").remove("attempts").apply();
+        prefs.edit().remove("blockedRev").remove("retryAfter").remove("attempts").remove("autoApplied")
+            .remove("autoReported").remove("autoStatus").apply();
         perform(()->Link.sync(this));
     }
     private void openClock(){
