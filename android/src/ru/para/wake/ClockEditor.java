@@ -11,17 +11,18 @@ final class ClockEditor {
     private final boolean enable;
     private final String target;
     private final Journal journal;
+    private final java.util.function.Predicate<String> cancelTime;
     private String original;
     private boolean saving;
     private Stage stage=Stage.LIST;
     private int previous=-1,stalled;
-    String failure;
+    String failure,deferTime;
     String trace="Ожидаю список будильников";
     boolean verified;
 
-    ClockEditor(boolean enable,String target){this(enable,target,"",false,(time,saving)->true);}
-    ClockEditor(boolean enable,String target,String original,boolean saving,Journal journal){
-        this.enable=enable;this.target=target;this.original=original;this.saving=saving;this.journal=journal;
+    ClockEditor(boolean enable,String target){this(enable,target,"",false,(time,saving)->true,time->true);}
+    ClockEditor(boolean enable,String target,String original,boolean saving,Journal journal,java.util.function.Predicate<String> cancelTime){
+        this.enable=enable;this.target=target;this.original=original;this.saving=saving;this.journal=journal;this.cancelTime=cancelTime;
     }
     void advance(List<AccessibilityNodeInfo> nodes){
         if(failure!=null || verified)return;
@@ -48,7 +49,7 @@ final class ClockEditor {
             row=matching(rows,enable?target:original);
             if(row==null){trace="Ожидаю сохранённую строку в списке";return;}
         }else{
-            ClockUi.Row destination=enable?matching(rows,target):null;
+            ClockUi.Row destination=enable?matching(rows,target):saving?matching(rows,original):null;
             if(failure!=null)return;
             if(saving && destination!=null){
                 row=destination;stage=Stage.VERIFY;
@@ -71,6 +72,10 @@ final class ClockEditor {
         }
         if(row.toggle.isChecked()==enable){verified=true;return;}
         if(stage==Stage.SWITCH)return;
+        if(!enable && !cancelTime.test(row.time)){
+            deferTime=row.time;return;
+        }
+        if(!journal.write(original,true)){failure="План изменился до переключения";return;}
         if(!ClockUi.click(row.toggle)){failure="Переключатель будильника недоступен";return;}
         stage=Stage.SWITCH;trace="Проверяю положение переключателя";
     }

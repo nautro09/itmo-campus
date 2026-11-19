@@ -24,6 +24,7 @@ public class Main extends Activity {
     private SharedPreferences prefs;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private boolean busy,visible,backgroundReady=true;
+    private android.window.OnBackInvokedCallback back;
     private String operationIssue="";
     private final Runnable redraw=()->{if(visible && screen!=Page.PAIR)draw(true);};
     private final SharedPreferences.OnSharedPreferenceChangeListener listener=(p,k)->{
@@ -38,7 +39,7 @@ public class Main extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
             View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
             View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
-        draw(false);
+        navigation();draw(false);
     }
     @Override public void onSaveInstanceState(Bundle state){super.onSaveInstanceState(state);state.putString("page",screen.name());}
     @Override public void onStart(){super.onStart();visible=true;prefs.registerOnSharedPreferenceChangeListener(listener);}
@@ -54,7 +55,16 @@ public class Main extends Activity {
         visible=false;handler.removeCallbacks(redraw);prefs.unregisterOnSharedPreferenceChangeListener(listener);super.onStop();
     }
     @Override public void onBackPressed(){if(screen!=Page.HOME)show(Page.HOME);else super.onBackPressed();}
-    private void show(Page next){operationIssue="";screen=next;draw(false);}
+    private void navigation(){
+        if(Build.VERSION.SDK_INT<33)return;
+        if(screen!=Page.HOME && back==null){
+            back=()->show(Page.HOME);
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,back);
+        }else if(screen==Page.HOME && back!=null){
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(back);back=null;
+        }
+    }
+    private void show(Page next){operationIssue="";screen=next;navigation();draw(false);}
     private void draw(boolean keepPosition){
         int y=keepPosition && ui!=null?ui.scroll.getScrollY():0;
         ui=new ClockLayout(this);

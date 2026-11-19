@@ -50,8 +50,12 @@ final class ClockScenario {
         ClockScenario fixture=new ClockScenario(a);
         test.runOnMainSync(fixture::list);
         UiAutomation access=test.getUiAutomation();
+        String[] original={""};
+        boolean[] saveSent={false};
+        ClockEditor.Journal journal=(time,saving)->{original[0]=time;saveSent[0]=saving;return true;};
         for(boolean on:new boolean[]{true,false}){
-            ClockEditor editor=new ClockEditor(on,target);
+            boolean resumed=false;
+            ClockEditor editor=new ClockEditor(on,target,"",false,journal,time->true);
             String observed="no window";
             for(int attempt=0;attempt<75 && !editor.verified;attempt++){
                 Thread.sleep(480);
@@ -63,11 +67,22 @@ final class ClockScenario {
                         description.append(n.getClassName()).append('[').append(ClockUi.text(n)).append("] ");
                     observed=description.toString();
                     editor.advance(nodes);
+                    if(on && saveSent[0] && !resumed){
+                        // Recreate the editor just after sending Save, as after a process interruption.
+                        editor=new ClockEditor(true,target,original[0],true,journal,time->true);
+                        resumed=true;
+                    }
                 }
                 if(editor.failure!=null)throw new AssertionError(editor.failure+" | "+observed);
             }
             if(!editor.verified || fixture.enabled!=on || !target.equals(fixture.time) || !fixture.secondEnabled)
                 throw new AssertionError("Clock editor verification: "+fixture.time+" "+fixture.enabled+" | "+observed);
+            if(on){
+                if(!resumed)throw new AssertionError("save journal was never exercised");
+                String rev=Link.prefs(a).getString("revision","");
+                Link.request(a,"applied",rev);
+                PlanScenario.step("verified");
+            }
         }
     }
 }

@@ -81,7 +81,7 @@ final class Link {
             try{
                 String proof=mac(deviceCredential(p),"relink\n"+site+"\n"+secret);
                 keepAuto=MessageDigest.isEqual(bytes(proof),bytes(response.getString("continuity")));
-            }catch(GeneralSecurityException ignored){ /* A new pairing can replace a lost key. */ }
+            }catch(Exception unavailable){ /* A valid QR can also replace an unreadable old key. */ }
         }
         String deviceKey=hex(MessageDigest.getInstance("SHA-256").digest(bytes(secret)));
         Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");

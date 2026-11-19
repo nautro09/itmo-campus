@@ -62,7 +62,7 @@ final class ClockUi {
         Map<AccessibilityNodeInfo,Row> found=new HashMap<>();
         for(AccessibilityNodeInfo n:nodes){
             String time=rowTime(n);
-            if(time.isEmpty() || n.isCheckable() || bounds(n).top<top)continue;
+            if(time.isEmpty() || bounds(n).top<top)continue;
             Row row=identify(n,time,top);
             if(row==null)return Collections.emptyList();
             Row previous=found.get(row.toggle);
@@ -74,23 +74,28 @@ final class ClockUi {
     }
     private static Row identify(AccessibilityNodeInfo timeNode,String time,int top){
         AccessibilityNodeInfo opener=null;
+        Row switchOnly=null;
         for(AccessibilityNodeInfo parent=timeNode;parent!=null && bounds(parent).top>=top;parent=parent.getParent()){
             if(opener==null && parent.isClickable() && !parent.isCheckable())opener=parent;
             AccessibilityNodeInfo toggle=null;
             boolean once=false;
             for(AccessibilityNodeInfo n:tree(parent)){
                 if(n.isCheckable()){
-                    if(toggle!=null)return null;
+                    if(toggle!=null)return switchOnly;
                     toggle=n;
                 }
                 String other=rowTime(n);
-                if(!other.isEmpty() && !other.equals(time))return null;
+                if(!other.isEmpty() && !other.equals(time))return switchOnly;
                 String words=(text(n)+" "+desc(n)).toLowerCase(Locale.ROOT);
                 if(words.contains("без повтора") || words.contains("один раз"))once=true;
             }
-            if(toggle!=null)return new Row(time,opener,toggle,once);
+            if(toggle!=null){
+                Row candidate=new Row(time,opener,toggle,once);
+                if(opener!=null)return candidate;
+                switchOnly=candidate;
+            }
         }
-        return null;
+        return switchOnly;
     }
     static boolean click(AccessibilityNodeInfo n){
         return n!=null && n.isEnabled() && n.performAction(AccessibilityNodeInfo.ACTION_CLICK);
@@ -122,6 +127,21 @@ final class ClockUi {
         found.sort(Comparator.comparingInt(n->bounds(n).centerX()));
         if(found.size()!=2 || bounds(found.get(0)).right>bounds(found.get(1)).left)return Collections.emptyList();
         return found;
+    }
+    // Support reports contain roles and static resource IDs only, never labels or screen contents.
+    static String describe(List<AccessibilityNodeInfo> nodes){
+        int switches=0,scroll=0;
+        Set<String> widgets=new LinkedHashSet<>();
+        for(AccessibilityNodeInfo n:nodes){
+            if(n.isCheckable())switches++;
+            if(n.isScrollable())scroll++;
+            if(widgets.size()>=6 || !(n.isScrollable() || n.isCheckable() || n.getRangeInfo()!=null))continue;
+            String type=String.valueOf(n.getClassName());
+            String resource=id(n);
+            widgets.add(type.substring(type.lastIndexOf('.')+1)+(resource.isEmpty()?"":" / "+resource));
+        }
+        return "Переключателей "+switches+" · прокручиваемых элементов "+scroll
+            +(widgets.isEmpty()?"":"\n"+String.join(", ",widgets));
     }
     private static int number(AccessibilityNodeInfo node){
         for(String s:new String[]{text(node),desc(node)}){

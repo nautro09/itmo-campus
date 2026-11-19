@@ -10,7 +10,7 @@
         <package android:name="com.huawei.deskclock"/><package android:name="com.android.deskclock"/>
         <intent><action android:name="android.intent.action.SHOW_ALARMS"/></intent></queries>
     <application android:icon="@drawable/campus_clock" android:label="Пара · Будильник" android:allowBackup="false" android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <activity android:name=".Main" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
+        <activity android:name=".Main" android:enableOnBackInvokedCallback="true" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
         <activity android:name=".PairActivity" android:exported="true" android:excludeFromRecents="true">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>

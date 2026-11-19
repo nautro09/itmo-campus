@@ -36,7 +36,7 @@ final class PlanScenario {
     static void changes(Context c)throws Exception{
         SharedPreferences p=Link.prefs(c);
         String rev=p.getString("revision","");
-        Link.request(c,"applied",rev);step("verified");
+        step("verified");
         p.edit().putBoolean("autoClock",true).commit();
         step("relink");Link.pair(c,SITE,CODE);
         check(p.getBoolean("autoClock",false),"same bot, keep permission after QR repair");
@@ -56,5 +56,6 @@ final class PlanScenario {
         Instant wake=Instant.parse("2026-11-20T05:30:00Z");
         check(NativeClock.nextRingMatches(Instant.parse("2026-11-19T12:00:00Z"),wake,zone),"can install at 15:00");
         check(!NativeClock.nextRingMatches(Instant.parse("2026-11-19T04:00:00Z"),wake,zone),"would ring today");
+        check(!NativeClock.ringsOnPlanDay("22:00","2026-11-20",Instant.parse("2026-11-19T18:00:00Z"),zone),"keep tonight's independent alarm");
     }
 }

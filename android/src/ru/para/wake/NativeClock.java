@@ -44,6 +44,23 @@ final class NativeClock {
         return day.atTime(time).atZone(phoneZone).toInstant().equals(alarm);
     }
 
+    static boolean ringsOnPlanDay(String hhmm,String day,Instant now,ZoneId zone){
+        LocalTime time=LocalTime.parse(hhmm);
+        ZonedDateTime here=now.atZone(zone);
+        LocalDate next=here.toLocalDate();
+        if(!time.isAfter(here.toLocalTime()))next=next.plusDays(1);
+        return next.atTime(time).atZone(zone).withZoneSameInstant(MOSCOW).toLocalDate().toString().equals(day);
+    }
+
+    static boolean verified(Context c,String rev,boolean enable,String target){
+        SharedPreferences p=Link.prefs(c);
+        if(!rev.equals(p.getString("revision","")) || !p.getBoolean("autoClock",false))return false;
+        String detail=enable?"В штатных Часах включён на "+target:"Штатный будильник выключен";
+        return p.edit().putString("autoApplied",rev).putString("autoStatus",detail)
+            .putLong("appliedAt",System.currentTimeMillis()).remove("retryAfter").remove("originalTime")
+            .remove("savePending").remove("blockedRev").remove("awaitClock").remove("clockTrace").commit();
+    }
+
     static boolean usable(SharedPreferences p, JSONObject row, Instant now){
         if (!actionable(row, now) || p.getBoolean("syncBlocked", false)) return false;
         long sinceReceipt = now.toEpochMilli() - p.getLong("lastReceived", 0);
@@ -76,7 +93,7 @@ final class NativeClock {
         if(plan.has("settings")) edit.putString("settings",plan.getJSONObject("settings").toString());
         String bot=plan.optString("bot");
         if(bot.matches("[A-Za-z0-9_]{5,32}"))edit.putString("bot",bot);
-        if(changed)edit.remove("opened").remove("confirmed").remove("autoStatus").remove("blockedRev")
+        if(changed)edit.remove("opened").remove("confirmed").remove("awaitClock").remove("autoStatus").remove("blockedRev")
             .remove("autoAttempt").remove("autoApplied").remove("autoReported").remove("retryAfter")
             .remove("attempts").remove("originalTime").remove("savePending").remove("clockTrace");
         if(!edit.commit())throw new java.io.IOException("storage");

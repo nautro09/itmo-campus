@@ -25,7 +25,7 @@ async def publish_url(path, port):
                 # Keep the pipe drained during long sessions.
                 async for _ in process.stderr:
                     pass
-        except (OSError, TimeoutError, asyncio.TimeoutError, ConnectionError) as error:
+        except (OSError, asyncio.TimeoutError) as error:
             print("Временный адрес пока недоступен ·", type(error).__name__, flush=True)
         finally:
             path.unlink(missing_ok=True)
@@ -33,8 +33,11 @@ async def publish_url(path, port):
 
 
 def revision():
-    head = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT,
-                          capture_output=True, text=True, check=False)
+    try:
+        head = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT,
+                              capture_output=True, text=True, check=False)
+    except OSError:
+        return ""
     return head.stdout.strip() if head.returncode == 0 else ""
 
 
@@ -70,8 +73,10 @@ async def serve(listener, address):
                 while True:
                     done, _ = await asyncio.wait((exited, changed, stop), timeout=30,
                                                  return_when=asyncio.FIRST_COMPLETED)
-                    if stop in done or exited in done:
-                        return
+                    if stop in done:
+                        return 0
+                    if exited in done:
+                        return process.returncode or 0
                     new_head = revision()
                     if changed in done or (head and new_head and head != new_head):
                         print("Обновляю бота на текущем HTTPS-адресе.", flush=True)
@@ -101,7 +106,7 @@ def main():
         except OSError as exc:
             raise SystemExit("Не удалось открыть порт Пары. Проверь, запущен ли бот в другом окне.") from exc
         with listener:
-            asyncio.run(serve(listener, Path(tmp)/"address"))
+            raise SystemExit(asyncio.run(serve(listener, Path(tmp)/"address")))
 
 
 if __name__ == "__main__":

@@ -29,7 +29,9 @@ public final class ClockAccess extends AccessibilityService {
     private String revision="",pkg="",target="";
     private boolean enable,networkRegistered,unlockRegistered,synchronizing;
     private ClockEditor editor;
-    private long deadline;
+    private long deadline,startLimit;
+    private boolean sawClock;
+    private String controls="";
     private SharedPreferences prefs(){return Link.prefs(this);}
     static boolean ready(){return connected!=null;}
     static void refresh(){
@@ -49,8 +51,10 @@ public final class ClockAccess extends AccessibilityService {
             unlockRegistered=true;
         }
         if(!networkRegistered){
-            getSystemService(ConnectivityManager.class).registerDefaultNetworkCallback(network);
-            networkRegistered=true;
+            try{
+                getSystemService(ConnectivityManager.class).registerDefaultNetworkCallback(network);
+                networkRegistered=true;
+            }catch(RuntimeException unavailable){ /* Unlock and the periodic job can still synchronize. */ }
         }
         onAvailable();
     }
@@ -140,23 +144,33 @@ public final class ClockAccess extends AccessibilityService {
         if(!unlocked()){status("План получен · применю при разблокировке");return;}
         long remaining=prefs().getLong("retryAfter",0)-now.toEpochMilli();
         if(remaining>0){later(Math.min(remaining,15*NativeClock.MINUTE));return;}
-        Intent clock=systemClock(this);
+        Intent clock;
+        try{clock=systemClock(this);}catch(SecurityException denied){clock=null;}
         if(clock==null){status("Не удалось однозначно определить штатные Часы. Подробности в настройках.");return;}
         pkg=clock.getPackage();
         revision=rev;
         editor=new ClockEditor(enable,target,prefs().getString("originalTime",""),prefs().getBoolean("savePending",false),
-            (original,saving)->prefs().edit().putString("originalTime",original).putBoolean("savePending",saving).commit());
+            (original,saving)->rev.equals(prefs().getString("revision","")) && prefs().getBoolean("autoClock",false)
+                && !prefs().getBoolean("syncBlocked",false) && unlocked()
+                && prefs().edit().putString("originalTime",original).putBoolean("savePending",saving).commit(),
+            time->NativeClock.ringsOnPlanDay(time,row.optString("day"),Instant.now(),ZoneId.systemDefault()));
         int attempts=prefs().getInt("attempts",0)+1;
         prefs().edit().putInt("attempts",attempts).putLong("retryAfter",now.toEpochMilli()+5*NativeClock.MINUTE).apply();
-        deadline=SystemClock.elapsedRealtime()+65_000;
-        try{startActivity(clock.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
+        deadline=SystemClock.elapsedRealtime()+65_000;startLimit=SystemClock.elapsedRealtime()+12_000;
+        sawClock=false;controls="";
+        try{
+            AccessibilityNodeInfo active=getRootInActiveWindow();
+            if(active==null || !pkg.contentEquals(String.valueOf(active.getPackageName())))
+                startActivity(clock.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        }
         catch(RuntimeException e){fail("Android не открыл штатные Часы",true);return;}
         status("Открываю штатные Часы");
         handler.postDelayed(tick,450);
     }
     private void fail(String reason,boolean retryable){
         boolean retry=retryable && prefs().getInt("attempts",0)<3;
-        SharedPreferences.Editor edit=prefs().edit().putString("clockTrace",editor.trace);
+        SharedPreferences.Editor edit=prefs().edit().putString("clockTrace",editor.trace+(controls.isEmpty()?"":"\n"+controls));
+        if(!sawClock)edit.putString("awaitClock",revision);
         if(!retry)edit.putString("blockedRev",revision);
         edit.apply();
         status(reason+(retry?" · повторю автоматически":" · подробности в настройках"));
@@ -165,11 +179,9 @@ public final class ClockAccess extends AccessibilityService {
     }
     private void success(){
         String rev=revision;
-        String detail=enable?"В штатных Часах включён на "+target:"Штатный будильник выключен";
-        prefs().edit().putString("autoApplied",rev).putString("autoStatus",detail)
-            .putLong("appliedAt",System.currentTimeMillis()).remove("retryAfter").remove("originalTime").remove("savePending")
-            .remove("blockedRev").remove("clockTrace").commit();
+        boolean confirmed=NativeClock.verified(this,rev,enable,target);
         reset();
+        if(!confirmed){begin();return;}
         Link.worker.execute(()->{
             try{
                 if(!rev.equals(prefs().getString("revision","")))return;
@@ -180,7 +192,17 @@ public final class ClockAccess extends AccessibilityService {
             }
         });
     }
-    public void onAccessibilityEvent(AccessibilityEvent event){ /* Only inspect the clock during our own bounded edit. */ }
+    public void onAccessibilityEvent(AccessibilityEvent event){
+        if(event.getEventType()!=AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || !revision.isEmpty()
+            || !prefs().getBoolean("autoClock",false) || !PACKAGES.contains(String.valueOf(event.getPackageName())))return;
+        String rev=prefs().getString("revision","");
+        if(rev.isEmpty() || !rev.equals(prefs().getString("awaitClock","")))return;
+        Intent expected;
+        try{expected=systemClock(this);}catch(SecurityException denied){return;}
+        if(expected==null || !expected.getPackage().contentEquals(event.getPackageName()))return;
+        prefs().edit().remove("awaitClock").remove("retryAfter").remove("blockedRev").apply();
+        handler.post(check);
+    }
     private void step(){
         if(revision.isEmpty())return;
         if(!prefs().getBoolean("autoClock",false) || !revision.equals(prefs().getString("revision","")) ||
@@ -189,13 +211,27 @@ public final class ClockAccess extends AccessibilityService {
             prefs().edit().remove("retryAfter").apply();
             status("Экран заблокирован · продолжу при разблокировке");reset();return;
         }
+        if(!sawClock && SystemClock.elapsedRealtime()>startLimit){fail("Android не открыл Часы в фоне",true);return;}
         if(SystemClock.elapsedRealtime()>deadline){fail(editor.trace+" · превышено время ожидания",true);return;}
         try{
             AccessibilityNodeInfo root=getRootInActiveWindow();
             if(root!=null && pkg.contentEquals(String.valueOf(root.getPackageName()))){
-                editor.advance(ClockUi.tree(root));
+                List<AccessibilityNodeInfo> nodes=ClockUi.tree(root);
+                String phase=editor.trace;
+                editor.advance(nodes);
+                if(!sawClock || !phase.equals(editor.trace) || editor.failure!=null)controls=ClockUi.describe(nodes);
+                sawClock=true;
                 if(editor.verified)success();
                 else if(editor.failure!=null)fail(editor.failure,false);
+                else if(editor.deferTime!=null){
+                    ZonedDateTime local=ZonedDateTime.now();
+                    ZonedDateTime next=local.toLocalDate().atTime(LocalTime.parse(editor.deferTime)).atZone(local.getZone());
+                    if(!next.isAfter(local))next=next.plusDays(1);
+                    long retry=next.toInstant().toEpochMilli()+NativeClock.MINUTE;
+                    prefs().edit().putLong("retryAfter",retry).remove("originalTime").remove("savePending").apply();
+                    status("У первого будильника другой день звонка · сохраняю его");
+                    reset();later(retry-System.currentTimeMillis());
+                }
             }else if(editor.started() && root!=null){fail("Экран Часов закрыт",true);return;}
         }catch(RuntimeException e){fail("Не удалось прочитать элементы Часов",true);}
         if(!revision.isEmpty())handler.postDelayed(tick,500);
