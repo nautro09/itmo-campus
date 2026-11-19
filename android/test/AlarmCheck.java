@@ -34,6 +34,7 @@ public class AlarmCheck extends Instrumentation {
             clock.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             c.startActivity(clock);
             startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+            Link.prefs(c).edit().clear().commit();
             Activity sample=startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             Thread.sleep(700);
             ClockScenario.check(this,sample);

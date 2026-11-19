@@ -79,7 +79,7 @@ final class ClockUi {
         for(AccessibilityNodeInfo n:nodes){
             String key=id(n);
             if(n.isClickable() && (key.matches("(?:.*_)?(?:save|done|positive|ok)(?:_button)?") ||
-                desc(n).matches("(?iu)сохранить|готово|ок|ok") || text(n).matches("(?iu)сохранить|готово")))return n;
+                desc(n).matches("(?iu)сохранить(?: изменения)?|готово|подтвердить|ок|ok") || text(n).matches("(?iu)сохранить|готово")))return n;
         }
         return null;
     }
@@ -88,7 +88,7 @@ final class ClockUi {
         for(AccessibilityNodeInfo n:nodes){
             String cl=String.valueOf(n.getClassName()).toLowerCase(Locale.ROOT);
             if(cl.contains("numberpicker") || cl.contains("spinner") && n.isScrollable()
-                || n.isScrollable() && id(n).matches(".*(hour|minute).*"))found.add(n);
+                || n.isScrollable() && (id(n).matches(".*(hour|minute).*") || cl.endsWith("picker") && !cl.contains("timepicker")))found.add(n);
         }
         found.sort(Comparator.comparingInt(n->bounds(n).centerX()));
         if(found.size()!=2 || bounds(found.get(0)).right>bounds(found.get(1)).left)return Collections.emptyList();
@@ -97,7 +97,10 @@ final class ClockUi {
     static int value(AccessibilityNodeInfo wheel){
         AccessibilityNodeInfo.RangeInfo range=wheel.getRangeInfo();
         if(range!=null)return Math.round(range.getCurrent());
-        for(String s:new String[]{text(wheel),desc(wheel)})if(s.matches("[0-9]{1,2}"))return Integer.parseInt(s);
+        for(String s:new String[]{text(wheel),desc(wheel)}){
+            java.util.regex.Matcher number=Pattern.compile("(?iu)^([0-9]{1,2})(?:\\s+(?:час(?:а|ов)?|минут(?:а|ы)?))?$").matcher(s);
+            if(number.matches())return Integer.parseInt(number.group(1));
+        }
         int best=Integer.MAX_VALUE,value=-1,center=bounds(wheel).centerY();
         for(AccessibilityNodeInfo n:tree(wheel)){
             String s=text(n);

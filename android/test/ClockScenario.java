@@ -23,7 +23,7 @@ final class ClockScenario {
     void list(){
         page();
         label("Сон | Подъем");label("Другие будильники");
-        LinearLayout row=new LinearLayout(activity);page.addView(row);
+        LinearLayout row=new LinearLayout(activity);row.setImportantForAccessibility(android.view.View.IMPORTANT_FOR_ACCESSIBILITY_YES);page.addView(row);
         Button edit=new Button(activity);edit.setText(time);row.addView(edit);
         edit.setOnClickListener(v->edit());
         Switch toggle=new Switch(activity);toggle.setChecked(enabled);row.addView(toggle);

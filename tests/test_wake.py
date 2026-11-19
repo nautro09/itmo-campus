@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from aiohttp.test_utils import TestClient, TestServer
@@ -102,5 +103,14 @@ class WakeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("получил",self.s.get("wake_ack")["text"])
             nsig,nh=headers("confirmed",rev)
             self.assertEqual((await post("/device/confirmed",nsig,**nh)).status,409)
+            row={"day":self.day,"at":int(self.now.timestamp()),"action":"set"}
+            with patch("wake.proposal",return_value=row):
+                applied=digest(json.dumps(row,sort_keys=True))
+                for op in ("applied","received"):
+                    signature,head=headers(op,applied)
+                    self.assertEqual((await post("/device/"+op,signature,**head)).status,200)
+                self.assertIn("проверила",self.s.get("wake_ack")["text"])
+                signature,head=headers("applied",rev)
+                self.assertEqual((await post("/device/applied",signature,**head)).status,409)
             revoke(self.s)
             self.assertEqual((await post("/device/ack",sig,**h)).status,401)

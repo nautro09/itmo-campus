@@ -18,12 +18,13 @@ public final class ClockAccess extends AccessibilityService {
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final Runnable tick=this::step;
     private final BroadcastReceiver unlock=new BroadcastReceiver(){
-        public void onReceive(Context c, Intent i){begin();}
+        public void onReceive(Context c, Intent i){onAvailable();}
     };
     private String revision="",pkg="",target="";
     private boolean enable;
     private ClockEditor editor;
     private long deadline;
+    private boolean synchronizing;
     private SharedPreferences prefs(){return Link.prefs(this);}
     static boolean ready(){return connected!=null;}
     static void refresh(){
@@ -39,7 +40,18 @@ public final class ClockAccess extends AccessibilityService {
         IntentFilter filter=new IntentFilter(Intent.ACTION_USER_PRESENT);
         if(Build.VERSION.SDK_INT>=33)registerReceiver(unlock,filter,Context.RECEIVER_NOT_EXPORTED);
         else registerReceiver(unlock,filter);
-        begin();
+        onAvailable();
+    }
+    private void onAvailable(){
+        if(!prefs().getBoolean("autoClock",false) || !prefs().contains("cipher"))return;
+        if(fresh()){begin();return;}
+        if(synchronizing)return;
+        synchronizing=true;
+        Link.worker.execute(()->{
+            try{Link.sync(this);}
+            catch(Exception unavailable){status("Ожидаю связи для получения свежего плана");}
+            finally{handler.post(()->synchronizing=false);}
+        });
     }
     @Override public void onDestroy(){
         if(connected==this){connected=null;unregisterReceiver(unlock);}
@@ -67,7 +79,7 @@ public final class ClockAccess extends AccessibilityService {
     }
     private void status(String text){prefs().edit().putString("autoStatus",text).apply();}
     private void begin(){
-        if(!revision.isEmpty() || !prefs().getBoolean("autoClock",false) || !prefs().contains("cipher") || !fresh())return;
+        if(connected!=this || !revision.isEmpty() || !prefs().getBoolean("autoClock",false) || !prefs().contains("cipher") || !fresh())return;
         JSONObject row=NativeClock.current(this);
         String rev=prefs().getString("revision","");
         if(rev.isEmpty() || rev.equals(prefs().getString("autoApplied","")) ||
