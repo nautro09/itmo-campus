@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 class Store:
     def __init__(self, path):
+        self.delivery_event = None
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
@@ -47,6 +48,8 @@ class Store:
     def set(self, key, value):
         self.db.execute("INSERT OR REPLACE INTO prefs VALUES (?,?)",
                         (key, json.dumps(value, ensure_ascii=False)))
+        if self.delivery_event is not None and key.startswith("quiet_"):
+            self.delivery_event.set()
 
     def quiet(self, now=None):
         if not self.get("quiet_on", True):
@@ -56,25 +59,30 @@ class Store:
         return start <= clock < end if start < end else clock >= start or clock < end
 
     def next_delivery(self, now=None):
-        item = self.db.execute("SELECT * FROM outbox ORDER BY id LIMIT 1").fetchone()
-        if not item:
+        if not self.db.execute("SELECT 1 FROM outbox LIMIT 1").fetchone():
             return None
         with self.db:
             if self.quiet(now):
                 self.db.execute("UPDATE outbox SET delivery='held' WHERE delivery='background'")
                 if not self.get("quiet_first",True):
                     self.db.execute("UPDATE outbox SET delivery='held' WHERE delivery='first'")
-                return self.db.execute("SELECT * FROM outbox WHERE delivery!='held' ORDER BY id LIMIT 1").fetchone()
-            held = self.db.execute("SELECT chat,text FROM outbox WHERE delivery='held' ORDER BY id").fetchall()
-            if held:
-                self.db.execute("DELETE FROM outbox WHERE delivery='held'")
-                groups = {}
-                for row in held:
-                    groups.setdefault(row["chat"], []).append(row["text"])
-                for chat, messages in groups.items():
-                    self.post(chat, "Сводка за тихие часы\n\n" + "\n\n".join(messages), delivery="background", now=now, rubric="digest")
-                item = self.db.execute("SELECT * FROM outbox ORDER BY id LIMIT 1").fetchone()
-        return item
+            else:
+                held = self.db.execute("SELECT chat,text FROM outbox WHERE delivery='held' ORDER BY id").fetchall()
+                if held:
+                    self.db.execute("DELETE FROM outbox WHERE delivery='held'")
+                    groups = {}
+                    for row in held:
+                        groups.setdefault(row["chat"], []).append(row["text"])
+                    for chat, messages in groups.items():
+                        self.post(chat, "Сводка за тихие часы\n\n" + "\n\n".join(messages),
+                                  delivery="background", now=now, rubric="digest")
+            # Each lookup uses the (delivery, id) index and preserves order within the class.
+            for priority in ("direct", "first", "background"):
+                row = self.db.execute("SELECT * FROM outbox WHERE delivery=? ORDER BY id LIMIT 1",
+                                      (priority,)).fetchone()
+                if row:
+                    return row
+        return None
 
     def post(self, chat, message, keyboard=None, *, delivery="direct", now=None, rubric=None):
         if delivery in ("first","background") and self.quiet(now):
@@ -101,3 +109,5 @@ class Store:
             markup = json.dumps(keyboard, ensure_ascii=False) if keyboard and i == len(chunks)-1 else None
             self.db.execute("INSERT INTO outbox(chat,text,keyboard,delivery,rubric) VALUES (?,?,?,?,?)",
                             (chat, part, markup, delivery, rubric if i == 0 else None))
+        if chunks and self.delivery_event is not None:
+            self.delivery_event.set()

@@ -13,7 +13,24 @@ class Monitor:
         self.lock = asyncio.Lock()
         self.signing_in = False
 
-    async def fetch(self, automatic=False):
+    def recent_for(self, days, now):
+        if not days or not self.s.get("interval", 1) or self.s.get("source_error"):
+            return False
+        checked = self.s.get("last_check")
+        if not checked:
+            return False
+        stamp = datetime.fromisoformat(checked)
+        latest = self.s.get("latest_dates", [])
+        return (stamp.tzinfo is not None and stamp.date() == now.date() and 0 <= (now - stamp).total_seconds() < 30
+                and all(day.isoformat() in latest for day in days))
+
+    async def fetch(self, automatic=False, *, for_days=()):
+        if self.recent_for(for_days, self.now()):
+            return
+        if self.lock.locked():
+            # Another caller is already updating the same personal seven-day window.
+            async with self.lock:
+                return
         async with self.lock:
             now = self.now()
             if automatic and not self.should_fetch(now):

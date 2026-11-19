@@ -9,8 +9,8 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import aiohttp
 
 from bulletin import COVERS, article
 from itmo import MSK, Portal, SourceError
@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 from extras import campus_names, draft_task, weekly_report
 from inbox import IsuInbox
 from mailbox_sync import ENV, Mail
-from miniapp import start_web, state
+from miniapp import start_web, services
 from menu import serve_menu
 import wake
 from miniapp import save_settings
@@ -42,29 +42,23 @@ class TelegramError(Exception):
 
 
 class Telegram:
-    def __init__(self, token):
+    def __init__(self, token, session):
         self.base = "https://api.telegram.org/bot" + token + "/"
-
-    def _call(self, method, args):
-        req = Request(self.base+method, data=json.dumps(args).encode(),
-                      headers={"Content-Type":"application/json"})
-        try:
-            with urlopen(req, timeout=35) as response:
-                result = json.load(response)
-        except HTTPError as e:
-            try:
-                delay = json.load(e).get("parameters", {}).get("retry_after", 3)
-            except (ValueError, OSError):
-                delay = 3
-            raise TelegramError(e.code, delay) from None
-        except (URLError, OSError, ValueError):
-            raise TelegramError(0) from None
-        if not result.get("ok"):
-            raise TelegramError(result.get("error_code", 0))
-        return result["result"]
+        self.session = session
 
     async def call(self, method, **args):
-        return await asyncio.to_thread(self._call, method, args)
+        try:
+            async with self.session.post(self.base + method, json=args, allow_redirects=False) as response:
+                try:
+                    result = await response.json(content_type=None)
+                except (ValueError, UnicodeError):
+                    raise TelegramError(response.status if response.status >= 400 else 0) from None
+                if response.status != 200 or not result.get("ok"):
+                    raise TelegramError(result.get("error_code") or response.status,
+                                        result.get("parameters", {}).get("retry_after", 3))
+                return result["result"]
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+            raise TelegramError(0) from None
 
 
 class Bot:
@@ -78,6 +72,7 @@ class Bot:
         self.mail = Mail(store,self.isu)
         self.isu_job = None
         self.check_job = None
+        self.mail_check_job = None
         self.report_check = False
         self.api = None
         self.login_job = None
@@ -94,8 +89,9 @@ class Bot:
         message = (f"⚙️ Настройки\n\nmy.itmo · {connected}\nПоследняя проверка · {last}\n"
                    f"Утренняя рассылка · {st.get('morning_time','07:30')+' МСК' if on else 'выключена'}\n"
                    f"Изменения на 7 дней · {str(interval)+' мин' if interval else 'проверка выключена'}")
+        statuses = self.mail.statuses()
         for key, label in (("isu","Входящие ИСУ"), ("mail","Учебный IMAP")):
-            message += "\n" + label + " · " + self.mail.statuses()[key]["detail"]
+            message += "\n" + label + " · " + statuses[key]["detail"]
         if st.get("source_error"):
             message += "\n\n" + st.get("source_error")
         toggle = "Выключить рассылку" if on else "Включить рассылку"
@@ -142,12 +138,28 @@ class Bot:
         try:
             await asyncio.gather(*checks)
             if self.report_check:
-                statuses = state(self)["services"]
+                statuses = services(self)
                 labels = {"isu":"Входящие ИСУ","mail":"Почта","itmo":"my.itmo","telegram":"Telegram"}
                 with self.s.db:
                     self.s.post(self.s.get("owner"), "\n".join(f"{labels[k]} · {v['detail']}" for k,v in statuses.items()))
         finally:
             self.report_check = False
+
+    async def report_mail_check(self):
+        try:
+            await self.mail.sync()
+            statuses = self.mail.statuses()
+            message = "\n".join(label + " · " + statuses[key]["detail"]
+                                for label, key in (("ИСУ", "isu"), ("IMAP", "mail")))
+        except Exception as exc:
+            print("Ошибка проверки почты:", type(exc).__name__, file=sys.stderr)
+            message = "Не удалось проверить почту. Попробуй ещё раз."
+        with self.s.db:
+            rows = None
+            if self.s.get("screen", {}).get("name") == "mail":
+                _, rows = await self.route(MAIL)
+                self.s.set("keyboard", rows)
+            self.s.post(self.s.get("owner"), message, rows)
 
     async def check_telegram(self):
         try:
@@ -195,7 +207,7 @@ class Bot:
             return self.plan.screen("from_text","Перешли сообщение преподавателя или отправь текст задания.",[[BACK]])
         if text==WEEK:
             if self.s.get("connected") and not self.monitor.signing_in:
-                await self.monitor.fetch()
+                await self.monitor.fetch(for_days=[datetime.now(MSK).date() + timedelta(days=i) for i in range(7)])
             return self.plan.screen("home",weekly_report(self.s,datetime.now(MSK).date()),MAIN)
         if text=="🔑 Войти в ИСУ":
             return self.begin_login(True),self.s.get("keyboard",MAIN)
@@ -209,10 +221,9 @@ class Bot:
             self.s.set("mail_on",text=="Включить пересылку")
             return await self.route(MAIL)
         if text=="Проверить почту" and name=="mail":
-            await self.mail.sync()
-            msg,rows=await self.route(MAIL)
-            details=[label+" · "+self.mail.statuses()[key]["detail"] for label,key in (("ИСУ","isu"),("IMAP","mail"))]
-            return msg+"\n"+("\n".join(filter(None,details)) or "Подключи ИСУ или заполни IMAP в .env."),rows
+            if self.mail_check_job is None or self.mail_check_job.done():
+                self.mail_check_job = asyncio.create_task(self.report_mail_check())
+            return "Проверяю входящие. Пришлю результат в этот чат.", self.s.get("keyboard", MAIN)
         if name=="mail" and text.startswith("✉ ") and text.split()[1].isdigit():
             item=self.s.db.execute("SELECT * FROM mail WHERE id=?",(int(text.split()[1]),)).fetchone()
             if item:
@@ -359,8 +370,8 @@ class Bot:
                 return self.plan.screen("settings", "Подключи личное расписание. Окно для входа откроется на компьютере, где запущен бот.", [[LOGIN]])
             if self.monitor.signing_in:
                 return "Дождись окончания входа в окне ИТМО.", self.s.get("keyboard", MAIN)
-            await self.monitor.fetch()
             day = datetime.now(MSK).date() + timedelta(days=int(text == TOMORROW))
+            await self.monitor.fetch(for_days=[day])
             return self.plan.screen("home", self.monitor.show_day(day), MAIN)
         if name == "settings":
             if text == LOGIN:
@@ -479,11 +490,19 @@ async def send_outbox_item(api, item):
 
 
 async def deliver(api, store):
+    signal = store.delivery_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
     while True:
+        signal.clear()
         item = store.next_delivery()
         if not item:
-            await asyncio.sleep(1)
+            try:
+                # Recheck held notifications when the quiet-hours minute changes.
+                await asyncio.wait_for(signal.wait(), 60 - time.time() % 60)
+            except asyncio.TimeoutError:
+                pass
             continue
+        started = loop.time()
         try:
             await send_outbox_item(api, item)
         except TelegramError as e:
@@ -495,7 +514,7 @@ async def deliver(api, store):
             print("Telegram отклонил сообщение, код", e.code, file=sys.stderr)
         with store.db:
             store.db.execute("DELETE FROM outbox WHERE id=?", (item["id"],))
-        await asyncio.sleep(1.05)
+        await asyncio.sleep(max(0, started + 1.05 - loop.time()))
 
 
 async def clock(monitor):
@@ -521,7 +540,14 @@ async def main():
     token = os.getenv("BOT_TOKEN","")
     if not token or ":" not in token or any(c.isspace() or c in "/?#" for c in token):
         raise SystemExit("Заполни BOT_TOKEN в локальном .env. Для перехода с v1 перенеси значение data/telegram-token в .env.")
-    api = Telegram(token)
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35), trust_env=True) as session:
+            await run_bot(data, Telegram(token, session), token)
+    finally:
+        process_lock.close()
+
+
+async def run_bot(data, api, token):
     me = await api.call("getMe")
     store = Store(data/"planner.sqlite3")
     portal = Portal(data/"my-itmo-browser")
@@ -539,22 +565,19 @@ async def main():
     print(f"Бот запущен: https://t.me/{me['username']}", flush=True)
     if not store.get("owner"):
         print(f"Код привязки для первого входа: {bot.pair_code}", flush=True)
+    workers = [asyncio.create_task(job) for job in (poll(api, bot), deliver(api, store),
+               clock(bot.monitor), bot.mail.run(), bot.grades.run(), serve_menu(api, store))]
     try:
-        await asyncio.gather(poll(api, bot), deliver(api,store), clock(bot.monitor),bot.mail.run(),bot.grades.run(),serve_menu(api,store))
+        await asyncio.gather(*workers)
     finally:
-        if bot.login_job and not bot.login_job.done():
-            bot.login_job.cancel()
-            await asyncio.gather(bot.login_job, return_exceptions=True)
-        if bot.isu_job and not bot.isu_job.done():
-            bot.isu_job.cancel()
-            await asyncio.gather(bot.isu_job,return_exceptions=True)
-        if bot.check_job and not bot.check_job.done():
-            bot.check_job.cancel()
-            await asyncio.gather(bot.check_job,return_exceptions=True)
+        jobs = workers + [job for job in (bot.login_job, bot.isu_job, bot.mail_check_job, bot.check_job) if job]
+        for job in jobs:
+            job.cancel()
+        await asyncio.gather(*jobs, return_exceptions=True)
         await runner.cleanup()
         await bot.isu.close()
         await portal.close()
-        process_lock.close()
+        store.db.close()
 
 
 if __name__ == "__main__":
