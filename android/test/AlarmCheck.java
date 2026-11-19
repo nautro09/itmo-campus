@@ -24,6 +24,11 @@ public class AlarmCheck extends Instrumentation {
             }catch(java.io.IOException expected){}
             if(!SyncJob.enable(c) || c.getSystemService(android.app.job.JobScheduler.class).getPendingJob(7)==null)
                 throw new AssertionError("network sync job");
+            getUiAutomation();
+            Activity sample=startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
+            ClockScenario.check(this,sample);
+            runOnMainSync(sample::finish);
+            waitForIdleSync();
             Link.prefs(c).edit().putString("cipher","fake-for-offline-test").commit();
             startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             JSONObject row=new JSONObject().put("day",LocalDate.now(NativeClock.MOSCOW).plusDays(1).toString()).put("action","set").put("at",System.currentTimeMillis()/1000+3600);
@@ -34,9 +39,7 @@ public class AlarmCheck extends Instrumentation {
             clock.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             c.startActivity(clock);
             Link.prefs(c).edit().clear().commit();
-            Activity sample=startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
-            Thread.sleep(700);
-            ClockScenario.check(this,sample);
+            startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
             result.putString("result","alarm lifecycle passed");finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("failure",e.toString());finish(Activity.RESULT_CANCELED,result);}
     }
