@@ -33,9 +33,8 @@ public class AlarmCheck extends Instrumentation {
             if(!AlarmClock.ACTION_SHOW_ALARMS.equals(clock.getAction()) || clock.getExtras()!=null)throw new AssertionError("unexpected mutation");
             clock.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             c.startActivity(clock);
-            startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
             Link.prefs(c).edit().clear().commit();
-            Activity sample=startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Activity sample=startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
             Thread.sleep(700);
             ClockScenario.check(this,sample);
             result.putString("result","alarm lifecycle passed");finish(Activity.RESULT_OK,result);

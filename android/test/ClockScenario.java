@@ -1,7 +1,7 @@
 package ru.para.wake;
 
 import android.app.*;
-import android.content.Context;
+import java.util.List;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.*;
 import java.util.Locale;
@@ -47,14 +47,22 @@ final class ClockScenario {
         UiAutomation access=test.getUiAutomation();
         for(boolean on:new boolean[]{true,false}){
             ClockEditor editor=new ClockEditor(on,"08:48");
+            String observed="no window";
             for(int attempt=0;attempt<32 && !editor.verified;attempt++){
                 Thread.sleep(600);
                 AccessibilityNodeInfo root=access.getRootInActiveWindow();
-                if(root!=null)editor.advance(ClockUi.tree(root));
-                if(editor.failure!=null)throw new AssertionError(editor.failure);
+                if(root!=null){
+                    List<AccessibilityNodeInfo> nodes=ClockUi.tree(root);
+                    StringBuilder description=new StringBuilder();
+                    for(AccessibilityNodeInfo n:nodes)
+                        description.append(n.getClassName()).append('[').append(ClockUi.text(n)).append("] ");
+                    observed=description.toString();
+                    editor.advance(nodes);
+                }
+                if(editor.failure!=null)throw new AssertionError(editor.failure+" | "+observed);
             }
             if(!editor.verified || fixture.enabled!=on || !"08:48".equals(fixture.time))
-                throw new AssertionError("Clock editor verification: "+fixture.time+" "+fixture.enabled);
+                throw new AssertionError("Clock editor verification: "+fixture.time+" "+fixture.enabled+" | "+observed);
         }
     }
 }
