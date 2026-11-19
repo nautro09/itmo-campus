@@ -57,8 +57,16 @@ class WakeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_device_scope_and_auth(self):
         self.s.set("wake_origin","https://campus.example")
-        code=pair_text(self.s).splitlines()[-1]
+        invitation=pair_text(self.s)
+        code=invitation.splitlines()[-1]
+        self.assertIn("https://campus.example/pair#"+code,invitation)
         async with TestClient(TestServer(application(SimpleNamespace(s=self.s),"bot-secret"))) as c:
+            landing=await c.get("/pair")
+            self.assertEqual(landing.status,200)
+            self.assertIn("no-store",landing.headers["Cache-Control"])
+            self.assertNotIn(code,await landing.text())
+            for asset in ("/qr.js","/pair.js"):
+                self.assertEqual((await c.get(asset)).status,200)
             async def post(path, key, **headers):
                 return await c.post(path,headers={"Authorization":"Bearer "+key,**headers})
             paired=await post("/device/pair",code)

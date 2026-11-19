@@ -76,7 +76,7 @@ final class Link {
         String deviceKey=hex(MessageDigest.getInstance("SHA-256").digest(bytes(secret)));
         Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.ENCRYPT_MODE,key());
-        if(!prefs(c).edit().putString("site",site).putString("iv",Base64.encodeToString(cipher.getIV(),2))
+        if(!prefs(c).edit().clear().putString("site",site).putString("iv",Base64.encodeToString(cipher.getIV(),2))
             .putString("cipher",Base64.encodeToString(cipher.doFinal(bytes(deviceKey)),2)).commit()) throw new IOException("Не удалось сохранить привязку.");
         SyncJob.enable(c);
     }

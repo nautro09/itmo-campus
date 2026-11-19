@@ -12,7 +12,7 @@ import android.widget.*;
 import org.json.JSONObject;
 
 public class Main extends Activity {
-    LinearLayout page,card; TextView message; boolean busy;
+    LinearLayout page,card; TextView message; boolean busy; boolean backgroundReady=true;
     int dp(int n){return Math.round(getResources().getDisplayMetrics().density*n);}
     void box(int color){
         card=new LinearLayout(this);card.setOrientation(1); card.setPadding(dp(18),dp(12),dp(18),dp(15));
@@ -40,12 +40,13 @@ public class Main extends Activity {
     }
     public void onCreate(Bundle b){super.onCreate(b);draw();}
     public void onResume(){super.onResume();if(!busy && Link.prefs(this).contains("cipher")){
-        SyncJob.enable(this);perform(()->Link.sync(this));
+        backgroundReady=SyncJob.enable(this);
+        perform(()->Link.sync(this));
     }}
     void draw(){
         int ink=0xff173b32;ScrollView scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(1);
         page.setBackgroundColor(0xfff1f4ec);page.setPadding(dp(16),dp(40),dp(16),dp(32));scroll.addView(page);setContentView(scroll);
-        page.setOnApplyWindowInsetsListener((v,i)->{page.setPadding(dp(16),dp(16)+i.getSystemWindowInsetTop(),dp(16),dp(16)+i.getSystemWindowInsetBottom());return i;});
+        page.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(16),dp(16)+i.getSystemWindowInsetTop(),dp(16),dp(16)+i.getSystemWindowInsetBottom());return i;});
         SharedPreferences p=Link.prefs(this);boolean linked=p.contains("cipher");JSONObject row=NativeClock.current(this);
         String rev=p.getString("revision","");
         box(ink);text("Пара  /  Подъём",17,0xffd4e6cc);
@@ -53,6 +54,7 @@ public class Main extends Activity {
         text(linked?row.optString("day")+"  ·  "+NativeClock.summary(row):"Подключи расписание из личного чата",16,0xffffffff);
         box(0xffffffff);
         if(linked){
+            if(!backgroundReady)text("Android отложил фоновую синхронизацию. Обновить расписание можно вручную.",14,ink);
             try{
                 JSONObject settings=new JSONObject(p.getString("settings","{}"));
                 if(settings.has("wake_on")){
@@ -70,7 +72,7 @@ public class Main extends Activity {
                 try{startActivity(NativeClock.open());
                     if(NativeClock.actionable(row)){p.edit().putString("opened",rev).commit();
                         Link.worker.execute(()->{try{Link.request(this,"opened",rev);}catch(Exception ignored){} });}
-                }catch(ActivityNotFoundException | SecurityException e){result(this,"Открой приложение «Часы» вручную.");p.edit().putString("opened",rev).apply();draw();}
+                }catch(ActivityNotFoundException | SecurityException e){result(this,"Открой приложение «Часы» вручную.");draw();}
             });
             text("Выбери первый будильник сверху. Проверь дату следующего звонка. В карточке будильника выбери время, мелодию, вибрацию и повтор.",15,ink);
             if(NativeClock.actionable(row) && rev.equals(p.getString("opened","")) && !rev.equals(p.getString("confirmed","")))
@@ -83,7 +85,7 @@ public class Main extends Activity {
                 .setPositiveButton("Отключить",(d,w)->perform(()->{getSystemService(JobScheduler.class).cancel(7);getSystemService(NotificationManager.class).cancel(9);p.edit().clear().commit();})).show());
         }else{
             text("Привязка телефона",22,ink);
-            text("В «Паре» открой профиль → Будильник и дорога → Привязать будильник телефона к расписанию.",15,ink);
+            text("Отсканируй QR-код обычной камерой телефона. QR находится в «Паре» → Профиль → Будильник и дорога. Можно также ввести адрес и код вручную.",15,ink);
             EditText host=field("HTTPS-адрес",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
             EditText code=field("Одноразовый код",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
             code.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);

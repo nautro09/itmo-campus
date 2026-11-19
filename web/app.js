@@ -306,7 +306,14 @@
     case "wake-rules":ruleEditor();break;
     case "add-rule":{const list=dialog.querySelector(".rule-list");if(list.children.length<30)list.insertAdjacentHTML("beforeend",ruleRow("","",list.children.length));break}
     case "remove-rule":el.closest(".rule-row").remove();dialog.querySelectorAll(".rule-row>b").forEach((v,i)=>v.textContent="К "+(i+1)+"-й паре");break;
-    case "wake-pair":await perform("wake_pair",{},{long:true,title:"Привязка телефона"});break;
+    case "wake-pair":{
+      const reply=await perform("wake_pair");
+      if(!reply?.pairing)break;
+      const {url,origin,code}=reply.pairing;
+      modal("Привязка телефона",`<p>Отсканируй QR обычной камерой HONOR. Код действует пять минут.</p><canvas class="pair-qr" aria-label="QR для привязки"></canvas><a class="btn primary" href="${esc(url)}" target="_blank" rel="noreferrer">Открыть на этом телефоне</a><details><summary>Ввести вручную</summary><p>${esc(origin)}</p><code>${esc(code)}</code></details>`);
+      showPairQR(dialog.querySelector("canvas"),url);
+      break;
+    }
     case "wake-revoke":await perform("wake_revoke");break;
     case "bars-check":await perform("bars_check",{},{long:true,title:"Баллы БаРС"});break;
     case "week-report":await perform("week_report",{},{long:true,title:"Недельная сводка"});break;

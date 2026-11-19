@@ -180,7 +180,7 @@ async def action(bot, kind, data):
     elif kind in ("wake_pair","wake_revoke"):
         with s.db:
             if kind=="wake_pair":
-                notice=wake.pair_text(s)
+                return dict(state(bot), pairing=wake.pair_ticket(s))
             else:
                 wake.revoke(s)
                 notice="Доступ телефона отозван."
@@ -203,7 +203,8 @@ def application(bot,token):
         return response
     app=web.Application(client_max_size=64*1024,middlewares=[headers])
     async def asset(request):
-        return web.FileResponse(WEB/request.match_info.get("asset","index.html"))
+        filename = "pair.html" if request.path == "/pair" else request.match_info.get("asset","index.html")
+        return web.FileResponse(WEB/filename)
     async def api(request):
         if not authorized(request.headers.get("X-Telegram-Init-Data",""),token,bot.s.get("owner")):
             return web.json_response({"error":"Открой приложение заново через меню своего Telegram-бота."},status=403)
@@ -219,8 +220,9 @@ def application(bot,token):
         except (ValueError,KeyError,TypeError,OverflowError):
             return web.json_response({"error":"Проверь поля или обнови страницу и повтори действие."},status=400)
     wake.register(app,bot.s)
+    app.router.add_get("/pair",asset)
     app.router.add_get("/",asset)
-    app.router.add_get("/{asset:index\\.html|app\\.js|app\\.css}",asset)
+    app.router.add_get("/{asset:index\\.html|app\\.js|app\\.css|qr\\.js|pair\\.js}",asset)
     app.router.add_post("/api/services",api)
     app.router.add_post("/api/state",api)
     app.router.add_post("/api/action",api)

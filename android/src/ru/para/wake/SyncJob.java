@@ -4,12 +4,16 @@ import android.app.job.*;
 import android.content.*;
 
 public class SyncJob extends JobService {
-    static void enable(Context c){
+    static boolean enable(Context c){
         JobScheduler scheduler=c.getSystemService(JobScheduler.class);
-        if(scheduler.getPendingJob(7)!=null)return;
-        JobInfo job=new JobInfo.Builder(7,new ComponentName(c,SyncJob.class))
+        try {
+            if(scheduler.getPendingJob(7)!=null)return true;
+            JobInfo job=new JobInfo.Builder(7,new ComponentName(c,SyncJob.class))
             .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setPeriodic(15*60*1000L).setPersisted(true).build();
-        scheduler.schedule(job);
+            return scheduler.schedule(job)==JobScheduler.RESULT_SUCCESS;
+        } catch(SecurityException | IllegalStateException e) {
+            return false;
+        }
     }
     public boolean onStartJob(JobParameters params){
         Link.worker.execute(()->{

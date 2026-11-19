@@ -98,13 +98,19 @@ def status(store):
     return status
 
 
-def pair_text(store):
+def pair_ticket(store):
     origin = store.get("wake_origin")
     if not origin:
         raise ValueError("Для привязки нужен действующий HTTPS-адрес приложения.")
     code = secrets.token_urlsafe(18)
     store.set("wake_pair", {"hash":digest(code), "until":time.time()+300})
-    return f"В приложении на телефоне введи адрес и одноразовый код. Код действует 5 минут. Новая привязка заменяет прежний телефон.\n\n{origin}\n{code}"
+    return {"url": origin + "/pair#" + code, "origin": origin, "code": code}
+
+
+def pair_text(store):
+    ticket = pair_ticket(store)
+    return (f"Открой QR для привязки будильника · действует 5 минут\n{ticket['url']}\n\n"
+            f"Для ручного ввода\n{ticket['origin']}\n{ticket['code']}")
 
 
 def revoke(store):

@@ -31,3 +31,6 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:var(--ui);font-
   .profile-person .btn{grid-column:2;justify-self:start}
   .preferences nav button{padding:10px 12px;line-height:1.3}
 }
+.pair-qr{display:block;width:min(100%,284px);height:auto;margin:16px auto;image-rendering:pixelated}
+#pair-page{max-width:540px;margin:8vh auto;padding:22px}
+#pair-page [hidden]{display:none}
