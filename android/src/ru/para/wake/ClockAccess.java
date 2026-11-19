@@ -22,9 +22,13 @@ public final class ClockAccess extends AccessibilityService {
         public void onReceive(Context c,Intent i){onAvailable();}
     };
     private final ConnectivityManager.NetworkCallback network=new ConnectivityManager.NetworkCallback(){
+        private Network online;
         public void onCapabilitiesChanged(Network n,NetworkCapabilities caps){
-            if(caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))handler.post(check);
+            if(caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)){
+                if(!n.equals(online)){online=n;handler.post(()->onAvailable(true));}
+            }else if(n.equals(online))online=null;
         }
+        public void onLost(Network n){if(n.equals(online))online=null;}
     };
     private String revision="",pkg="",target="";
     private boolean enable,networkRegistered,unlockRegistered,synchronizing;
@@ -58,11 +62,15 @@ public final class ClockAccess extends AccessibilityService {
         }
         onAvailable();
     }
-    private void onAvailable(){
+    private void onAvailable(){onAvailable(false);}
+    private void onAvailable(boolean networkRestored){
         if(connected!=this || !prefs().getBoolean("autoClock",false) || !prefs().contains("cipher") || synchronizing)return;
         synchronizing=true;
         Link.worker.execute(()->{
-            try{Link.syncIfDue(this);}
+            try{
+                if(networkRestored && !prefs().getString("syncIssue","").isEmpty())Link.sync(this);
+                else Link.syncIfDue(this);
+            }
             catch(Exception ignored){ /* Link stores the cause and schedules a cached-plan check. */ }
             finally{handler.post(()->synchronizing=false);}
         });
@@ -160,8 +168,16 @@ public final class ClockAccess extends AccessibilityService {
         sawClock=false;controls="";
         try{
             AccessibilityNodeInfo active=getRootInActiveWindow();
-            if(active==null || !pkg.contentEquals(String.valueOf(active.getPackageName())))
-                startActivity(clock.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            boolean onList=false;
+            if(active!=null && pkg.contentEquals(String.valueOf(active.getPackageName()))){
+                List<AccessibilityNodeInfo> visible=ClockUi.tree(active);
+                onList=ClockUi.label(visible,"Другие будильники")!=null;
+                if(!onList && (ClockUi.label(visible,"Изменить будильник")!=null || ClockUi.label(visible,"Добавить будильник")!=null)){
+                    prefs().edit().putString("awaitClock",rev).remove("retryAfter").apply();
+                    status("Открыт редактор Часов · продолжу после возврата к списку");reset();return;
+                }
+            }
+            if(!onList)startActivity(clock.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         }
         catch(RuntimeException e){fail("Android не открыл штатные Часы",true);return;}
         status("Открываю штатные Часы");
