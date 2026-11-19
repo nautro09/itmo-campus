@@ -58,7 +58,7 @@ class Grades:
                     self.s.set("bars_snapshot", {"scope": scope, "rows": current, "known": {**prior, **current}})
                     self.s.set("bars_status", "Проверено " + datetime.now(MSK).strftime("%d.%m в %H:%M МСК"))
                     if changes and self.s.get("notify_bars",True):
-                        self.s.post(self.s.get("owner"), "📈 Изменения в БаРС\n" + "\n".join(changes), delivery="background")
+                        self.s.post(self.s.get("owner"), "Изменения в БаРС\n" + "\n".join(changes), delivery="background", rubric="grades")
             except (ValueError, TypeError, KeyError, InvalidOperation, SourceError) as exc:
                 with self.s.db:
                     self.s.set("bars_status", str(exc) if isinstance(exc, SourceError) else "БаРС вернул незнакомый формат. Показана последняя копия.")
@@ -71,5 +71,5 @@ class Grades:
 
     def report(self):
         rows = self.s.get("bars_snapshot", {}).get("rows", {}).values()
-        return "\n".join(["📈 БаРС · баллы за семестр", self.s.get("bars_status", "Для проверки войди в my.itmo."),
+        return "\n".join(["БаРС · баллы за семестр", self.s.get("bars_status", "Для проверки войди в my.itmo."),
                           *(f"{r['name']} · {r['score']}" for r in rows)])

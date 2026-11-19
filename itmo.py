@@ -70,13 +70,13 @@ def details(x):
 
 def lesson_text(x):
     return f"{x['time_start']}–{x['time_end']}  {x['subject']}" + (
-        "\n    " + details(x) if details(x) else "")
+        "\n" + details(x) if details(x) else "")
 
 
 def day_text(week, day):
     key = day.isoformat()
     weekdays = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
-    heading = f"📅 {day:%d.%m.%Y}, {weekdays[day.weekday()]}"
+    heading = f"{day:%d.%m.%Y}, {weekdays[day.weekday()]}"
     if key not in week:
         return heading + "\nmy.itmo не вернул данные за этот день."
     return heading + "\n\n" + ("\n\n".join(lesson_text(x) for x in week[key]) or "Пар нет.")
@@ -116,11 +116,11 @@ def changes(before, after, *, include_lessons=False):
         for key in sorted(a.keys() & b.keys()):
             if len(a[key]) == len(b[key]) == 1:
                 x, y = a[key][0], b[key][0]
-                edits.append(((x, y), "✏️ Изменили пару\nБыло  " + when(x) + "\nСтало  " + when(y)))
+                edits.append(((x, y), "Изменили пару\nБыло  " + when(x) + "\nСтало  " + when(y)))
                 left.remove(x)
                 right.remove(y)
-    edits.extend(((x,), "➖ Убрали из расписания\n" + when(x)) for x in left)
-    edits.extend(((x,), "➕ Добавили пару\n" + when(x)) for x in right)
+    edits.extend(((x,), "Убрали из расписания\n" + when(x)) for x in left)
+    edits.extend(((x,), "Добавили пару\n" + when(x)) for x in right)
     return edits if include_lessons else [text for _, text in edits]
 
 

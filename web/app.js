@@ -277,7 +277,7 @@
     const active=groups.find(([id])=>id===profilePage)||groups[0];
     return mast("Профиль",person.isu?"ИСУ "+person.isu:"Личный кабинет")+
       `<section class="panel person profile-person"><span class="avatar-box">${esc(initials(person.name))}</span><h2>${esc(person.name||"ИТМО ID")}</h2>${btn("bars-check","Баллы БаРС","file","minor")}</section>
-      <div class="preferences"><nav aria-label="Разделы профиля">${groups.map(([id,title])=>`<button data-action="profile-page" data-value="${id}" aria-pressed="${active[0]===id}">${title}</button>`).join("")}</nav><section class="panel"><h2>${active[1]}</h2><div class="settings-list">${active[2]}</div></section></div>`;
+      <div class="preferences"><nav aria-label="Разделы профиля">${groups.map(([id,title])=>`<button data-action="profile-page" data-value="${id}" aria-pressed="${active[0]===id}">${title}</button>`).join("")}</nav><section class="panel">${section(active[1])}<div class="settings-list">${active[2]}</div></section></div>`;
 
   }
   function render(){shell();main.innerHTML=({today,week,tasks,mail,profile})[tab]()}

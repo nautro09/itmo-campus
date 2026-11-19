@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from bulletin import COVERS, article
 from itmo import MSK, Portal, SourceError
 from grades import Grades
 from monitor import Monitor
@@ -419,7 +420,20 @@ class Bot:
                 message, rows = response
                 if self.s.get("owner") == chat_id:
                     self.s.set("keyboard",rows)
-                self.s.post(chat_id,message,rows)
+                rubric = None
+                if owner == chat_id:
+                    view = self.s.get("screen", {}).get("name")
+                    if text in (TODAY, TOMORROW) and view == "home" and not self.monitor.signing_in:
+                        rubric = "day"
+                    elif text == WEEK and view == "home":
+                        rubric = "week"
+                    elif view == "grades" and text == "📈 Баллы БаРС":
+                        rubric = "grades"
+                    elif view == "mail_item" and text.startswith("✉ "):
+                        rubric = "mail"
+                    elif view in ("list", "card"):
+                        rubric = "tasks"
+                self.s.post(chat_id, message, rows, rubric=rubric)
         self.s.set("last_update",uid)
         self.s.db.commit()
 
@@ -442,17 +456,36 @@ async def poll(api, bot):
             await asyncio.sleep(3)
 
 
+async def send_outbox_item(api, item):
+    common = {"chat_id": item["chat"]}
+    if item["keyboard"]:
+        common["reply_markup"] = {"keyboard": json.loads(item["keyboard"]), "resize_keyboard": True,
+                                  "is_persistent": True}
+    kind, text = item["rubric"], item["text"]
+    if kind:
+        for cover in ((True, False) if kind in COVERS else (False,)):
+            try:
+                await api.call("sendRichMessage", rich_message=article(kind, text, cover=cover), **common)
+                return
+            except TelegramError as exc:
+                if exc.code == 404:
+                    break
+                if exc.code != 400:
+                    raise
+    first = text.partition("\n")[0]
+    if kind and first:
+        common["entities"] = [{"type": "bold", "offset": 0, "length": len(first.encode("utf-16-le")) // 2}]
+    await api.call("sendMessage", text=text, link_preview_options={"is_disabled": True}, **common)
+
+
 async def deliver(api, store):
     while True:
         item = store.next_delivery()
         if not item:
             await asyncio.sleep(1)
             continue
-        args = {"chat_id":item["chat"], "text":item["text"], "link_preview_options":{"is_disabled":True}}
-        if item["keyboard"]:
-            args["reply_markup"] = {"keyboard":json.loads(item["keyboard"]), "resize_keyboard":True, "is_persistent":True}
         try:
-            await api.call("sendMessage", **args)
+            await send_outbox_item(api, item)
         except TelegramError as e:
             if e.code == 401:
                 raise

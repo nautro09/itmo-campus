@@ -192,7 +192,7 @@ class Mail:
             created = self.s.db.execute("INSERT OR IGNORE INTO mail(source,source_id,sender,subject,body,date) VALUES (?,?,?,?,?,?)",
                                         (src,x["key"],x["sender"],x["subject"],x["body"],x["date"])).rowcount
             if created and notify and self.s.get("notify_isu" if src=="ИСУ" else "notify_imap",True) and self.s.get("mail_on",True) and self.s.get("owner"):
-                self.s.post(self.s.get("owner"),f"✉️ {src} · {x['sender']}\n{x['subject']}\n\n{x['body'] or 'Текст отсутствует.'}", delivery="background")
+                self.s.post(self.s.get("owner"),f"{src} · {x['sender']}\n{x['subject']}\n\n{x['body'] or 'Текст отсутствует.'}", delivery="background", rubric="mail")
 
     def statuses(self):
         def status(key, enabled, missing):

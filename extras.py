@@ -54,7 +54,7 @@ def weekly_report(store, start, week=None):
     tasks = store.db.execute("SELECT due,title FROM tasks WHERE done=0 AND due>=? AND due<? ORDER BY due,id",
                              (start.isoformat(),(last+timedelta(days=1)).isoformat())).fetchall()
     cache = {k:{"lessons":v} for k,v in week.items()} if week is not None else store.get("cache",{})
-    text = [f"📚 Нагрузка с {start:%d.%m} по {last:%d.%m}"]
+    text = [f"Нагрузка с {start:%d.%m} по {last:%d.%m}"]
     for offset in range(7):
         d = start+timedelta(days=offset)
         entry = cache.get(d.isoformat())
@@ -96,6 +96,6 @@ def departure(store, now):
     minutes = campuses.get(first.get("building",""),minutes)
     signature = [today,first["time_start"],first["building"]]
     if begins-timedelta(minutes=minutes) <= now < begins and store.get("departure_sent") != signature:
-        store.post(store.get("owner"),f"🚶 Пора выходить · {first['subject']}\nНачало в {first['time_start']}. "
-                   f"{first['building'] or 'Адрес не указан'} · дорога {minutes} мин.", delivery="background")
+        store.post(store.get("owner"),f"Пора выходить\n{first['subject']}\nНачало в {first['time_start']}. "
+                   f"{first['building'] or 'Адрес не указан'} · дорога {minutes} мин.", delivery="background", rubric="departure")
         store.set("departure_sent",signature)

@@ -34,6 +34,8 @@ class Store:
             columns = {row[1] for row in self.db.execute("PRAGMA table_info(outbox)")}
             if "delivery" not in columns:
                 self.db.execute("ALTER TABLE outbox ADD COLUMN delivery TEXT NOT NULL DEFAULT 'direct'")
+            if "rubric" not in columns:
+                self.db.execute("ALTER TABLE outbox ADD COLUMN rubric TEXT")
             self.db.execute("CREATE INDEX IF NOT EXISTS outbox_delivery ON outbox(delivery,id)")
             self.db.executemany("INSERT OR IGNORE INTO categories VALUES (?)",
                                 [(v,) for v in ("Учёба", "Лабораторные", "Проекты", "Личное")])
@@ -70,11 +72,11 @@ class Store:
                 for row in held:
                     groups.setdefault(row["chat"], []).append(row["text"])
                 for chat, messages in groups.items():
-                    self.post(chat, "🌙 Сводка за тихие часы\n\n" + "\n\n".join(messages), delivery="background", now=now)
+                    self.post(chat, "Сводка за тихие часы\n\n" + "\n\n".join(messages), delivery="background", now=now, rubric="digest")
                 item = self.db.execute("SELECT * FROM outbox ORDER BY id LIMIT 1").fetchone()
         return item
 
-    def post(self, chat, message, keyboard=None, *, delivery="direct", now=None):
+    def post(self, chat, message, keyboard=None, *, delivery="direct", now=None, rubric=None):
         if delivery in ("first","background") and self.quiet(now):
             if delivery == "background" or not self.get("quiet_first",True):
                 delivery = "held"
@@ -97,4 +99,5 @@ class Store:
         chunks = [part for part in chunks if part]
         for i, part in enumerate(chunks):
             markup = json.dumps(keyboard, ensure_ascii=False) if keyboard and i == len(chunks)-1 else None
-            self.db.execute("INSERT INTO outbox(chat,text,keyboard,delivery) VALUES (?,?,?,?)", (chat, part, markup, delivery))
+            self.db.execute("INSERT INTO outbox(chat,text,keyboard,delivery,rubric) VALUES (?,?,?,?,?)",
+                            (chat, part, markup, delivery, rubric if i == 0 else None))
