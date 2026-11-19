@@ -91,7 +91,11 @@ def status(store):
         return "Телефон не привязан."
     if not info:
         return "Телефон привязан. Ожидаю подтверждения будильника."
-    return "Последний ответ телефона · " + info["time"] + "\n" + info["text"]
+    last = store.get("wake_last_seen")
+    status = "Последний ответ телефона · " + (datetime.fromisoformat(last).strftime("%d.%m %H:%M МСК") if last else info["time"]) + "\n" + info["text"]
+    if last and datetime.now(MSK) - datetime.fromisoformat(last) > timedelta(minutes=45):
+        status += "\nТелефон давно не выходил на связь. Проверь адрес сервера и фоновую работу APK."
+    return status
 
 
 def pair_text(store):
@@ -104,7 +108,7 @@ def pair_text(store):
 
 
 def revoke(store):
-    for key in ("wake_pair","wake_device","wake_ack"):
+    for key in ("wake_pair","wake_device","wake_ack","wake_last_seen"):
         store.set(key,None)
 
 
@@ -145,11 +149,15 @@ def register(app, store):
             row = proposal(store)
             revision = digest(json.dumps(row,sort_keys=True))
             if op=="nativeplan":
-                return reply({"proposal":row,"revision":revision})
+                settings = {name: store.get(name, default) for name, default in DEFAULTS.items()}
+                settings["travel_minutes"] = store.get("travel_minutes", 35)
+                return reply({"proposal":row,"revision":revision,"settings":settings})
             if not hmac.compare_digest(revision,ack):
                 raise web.HTTPConflict()
             if op!="received" and row["action"] not in ("set","cancel"):
                 raise web.HTTPConflict()
+            with store.db:
+                store.set("wake_last_seen", datetime.now(MSK).isoformat())
             old = store.get("wake_ack") or {}
             rank = list(stages).index(op)
             if old.get("revision")!=revision or rank>old.get("rank",-1):

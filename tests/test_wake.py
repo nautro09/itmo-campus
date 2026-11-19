@@ -81,7 +81,14 @@ class WakeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await post("/device/ack",sig,**h)).status,200)
             nsig,nh=headers("nativeplan")
             native=await (await post("/device/nativeplan",nsig,**nh)).json()
-            rev=native["revision"]
+            self.assertTrue(native["settings"]["wake_on"])
+            self.assertIn("09:50=08:30",native["settings"]["wake_rules"])
+            with self.s.db:
+                save_settings(self.s,{"wake_rules":"09:50=07:40"})
+            sig_update,head_update=headers("nativeplan")
+            updated=await (await post("/device/nativeplan",sig_update,**head_update)).json()
+            self.assertEqual(updated["settings"]["wake_rules"],"09:50=07:40")
+            rev=updated["revision"]
             nsig,nh=headers("received",rev)
             self.assertEqual((await post("/device/received",nsig,**nh)).status,200)
             self.assertIn("получил",self.s.get("wake_ack")["text"])

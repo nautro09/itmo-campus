@@ -38,6 +38,8 @@ final class NativeClock {
         android.content.SharedPreferences p=Link.prefs(c);
         boolean changed=!revision.equals(p.getString("revision",""));
         android.content.SharedPreferences.Editor edit=p.edit().putString("proposal",row.toString()).putString("revision",revision);
+        if(plan.has("settings")) edit.putString("settings",plan.getJSONObject("settings").toString());
+        edit.putLong("lastReceived",System.currentTimeMillis());
         if(changed)edit.remove("opened").remove("confirmed");
         if(!edit.commit())throw new java.io.IOException("storage");
         NotificationManager nm=c.getSystemService(NotificationManager.class);

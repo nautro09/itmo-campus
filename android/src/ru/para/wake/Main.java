@@ -34,12 +34,14 @@ public class Main extends Activity {
         if(busy)return;busy=true;draw();
         Link.worker.execute(()->{
             try{w.run();result(this,"Данные сохранены");}
-            catch(Exception e){result(this,"Не удалось подтвердить запрос. Проверь сеть и актуальность плана.");}
+            catch(Exception e){result(this,"Связь не подтверждена. Проверь сеть. Если адрес в Telegram изменился, повтори привязку.");}
             runOnUiThread(()->{busy=false;if(!isDestroyed())draw();});
         });
     }
     public void onCreate(Bundle b){super.onCreate(b);draw();}
-    public void onResume(){super.onResume();if(page!=null && Link.prefs(this).contains("cipher"))draw();}
+    public void onResume(){super.onResume();if(!busy && Link.prefs(this).contains("cipher")){
+        SyncJob.enable(this);perform(()->Link.sync(this));
+    }}
     void draw(){
         int ink=0xff173b32;ScrollView scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(1);
         page.setBackgroundColor(0xfff1f4ec);page.setPadding(dp(16),dp(40),dp(16),dp(32));scroll.addView(page);setContentView(scroll);
@@ -51,6 +53,19 @@ public class Main extends Activity {
         text(linked?row.optString("day")+"  ·  "+NativeClock.summary(row):"Подключи расписание из личного чата",16,0xffffffff);
         box(0xffffffff);
         if(linked){
+            try{
+                JSONObject settings=new JSONObject(p.getString("settings","{}"));
+                if(settings.has("wake_on")){
+                    text("Настройки из Telegram",21,ink);
+                    text(settings.optBoolean("wake_on")?"Автобудильник включён":"Автобудильник выключен",15,ink);
+                    String rules=settings.optString("wake_rules").replace("=", " → ").replace(", ", "\n");
+                    text(rules.isEmpty()?"Индивидуальных правил нет":rules,16,ink);
+                    text("Сборы · "+settings.optInt("wake_prep")+" мин   Онлайн · "+settings.optInt("wake_online")+" мин",14,ink);
+                }
+                long last=p.getLong("lastReceived",0);
+                if(last>0)text("Получено "+java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(last)),14,ink);
+            }catch(org.json.JSONException ignored){}
+
             button("Открыть штатные Часы",()->{
                 try{startActivity(NativeClock.open());
                     if(NativeClock.actionable(row)){p.edit().putString("opened",rev).commit();
@@ -74,6 +89,21 @@ public class Main extends Activity {
             code.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
             button("Привязать телефон",()->{String url=host.getText().toString(),ticket=code.getText().toString().trim();perform(()->{Link.pair(this,url,ticket);Link.sync(this);});});
         }
+        box(0xffffffff);
+        button("Сведения о телефоне и Часах",()->{
+            android.content.pm.PackageManager pm=getPackageManager();
+            StringBuilder report=new StringBuilder(Build.MANUFACTURER+" "+Build.MODEL+" · Android "+Build.VERSION.RELEASE);
+            for(android.content.pm.ResolveInfo handler:pm.queryIntentActivities(NativeClock.open(),0)){
+                String pkg=handler.activityInfo.packageName;
+                try{
+                    android.content.pm.PackageInfo info=pm.getPackageInfo(pkg,0);
+                    report.append("\n").append(handler.loadLabel(pm)).append(" · ").append(info.versionName).append(" · ").append(pkg);
+                }catch(android.content.pm.PackageManager.NameNotFoundException ignored){}
+            }
+            new AlertDialog.Builder(this).setTitle("Сведения для проверки совместимости").setMessage(report.toString())
+                .setNegativeButton("Закрыть",null).setPositiveButton("Скопировать",(dialog,which)->
+                    getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Часы",report.toString()))).show();
+        });
         message=text(busy?"Проверяю…":p.getString("status",""),14,ink);
     }
 }

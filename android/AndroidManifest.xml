@@ -1,9 +1,10 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="ru.para.wake" android:versionCode="2" android:versionName="2.0">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="ru.para.wake" android:versionCode="3" android:versionName="3.0">
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
+    <queries><intent><action android:name="android.intent.action.SHOW_ALARMS"/></intent></queries>
     <application android:icon="@drawable/campus_clock" android:label="Пара · Будильник" android:allowBackup="false" android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity android:name=".Main" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
         <service android:name=".SyncJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE"/>
