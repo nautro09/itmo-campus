@@ -34,6 +34,9 @@ public class AlarmCheck extends Instrumentation {
             clock.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             c.startActivity(clock);
             startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+            Activity sample=startActivitySync(new Intent(c,Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Thread.sleep(700);
+            ClockScenario.check(this,sample);
             result.putString("result","alarm lifecycle passed");finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("failure",e.toString());finish(Activity.RESULT_CANCELED,result);}
     }

@@ -44,6 +44,7 @@ final class NativeClock {
         if(!edit.commit())throw new java.io.IOException("storage");
         NotificationManager nm=c.getSystemService(NotificationManager.class);
         if(!actionable(row)){nm.cancel(9);return;}
+        if(p.getBoolean("autoClock",false)){nm.cancel(9);return;}
         if(!changed || !nm.areNotificationsEnabled())return;
         nm.createNotificationChannel(new NotificationChannel("plan","Изменения подъёма",NotificationManager.IMPORTANCE_DEFAULT));
         PendingIntent show=PendingIntent.getActivity(c,0,new Intent(c,Main.class),PendingIntent.FLAG_IMMUTABLE);

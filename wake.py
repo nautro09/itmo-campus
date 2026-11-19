@@ -150,7 +150,7 @@ def register(app, store):
             body = json.dumps(data,separators=(",",":")).encode()
             mac = hmac.digest(key.encode(),nonce.encode()+b"\n"+body,"sha256").hex()
             return web.Response(body=body,content_type="application/json",headers={"X-Wake-MAC":mac})
-        stages = {"received":"Телефон получил расчёт", "opened":"Открыты штатные Часы", "confirmed":"Пользователь подтвердил изменение в Часах"}
+        stages = {"received":"Телефон получил расчёт", "opened":"Открыты штатные Часы", "confirmed":"Пользователь подтвердил изменение в Часах", "applied":"Пара проверила время и переключатель в штатных Часах"}
         if op=="nativeplan" or op in stages:
             row = proposal(store)
             revision = digest(json.dumps(row,sort_keys=True))
@@ -190,4 +190,4 @@ def register(app, store):
             if old.get("text")!=text and any(row["action"]=="set" for row in days):
                 store.post(store.get("owner"),"⏰ Приложение версии 1 подтвердило свой будильник\n"+text,delivery="background")
         return reply({"ok":True})
-    app.router.add_post("/device/{op:pair|plan|ack|nativeplan|received|opened|confirmed}",device)
+    app.router.add_post("/device/{op:pair|plan|ack|nativeplan|received|opened|confirmed|applied}",device)

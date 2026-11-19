@@ -51,7 +51,7 @@ public class Main extends Activity {
         String rev=p.getString("revision","");
         box(ink);text("Пара  /  Подъём",17,0xffd4e6cc);
         text("set".equals(row.optString("action"))?NativeClock.time(row):"Расписание",42,0xffddf69a).setTypeface(Typeface.DEFAULT,Typeface.BOLD);
-        text(linked?row.optString("day")+"  ·  "+NativeClock.summary(row):"Подключи расписание из личного чата",16,0xffffffff);
+        text(linked?row.optString("day")+"  ·  "+(p.getBoolean("autoClock",false) && "set".equals(row.optString("action"))?"Подъём по расписанию":NativeClock.summary(row)):"Подключи расписание из личного чата",16,0xffffffff);
         box(0xffffffff);
         if(linked){
             if(!backgroundReady)text("Android отложил фоновую синхронизацию. Обновить расписание можно вручную.",14,ink);
@@ -68,14 +68,35 @@ public class Main extends Activity {
                 if(last>0)text("Получено "+java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(last)),14,ink);
             }catch(org.json.JSONException ignored){}
 
+            boolean automatic=p.getBoolean("autoClock",false);
+            if(!automatic || !ClockAccess.ready()){
+                button("Включить автоизменение будильника",()->new AlertDialog.Builder(this)
+                    .setTitle("Управление штатными Часами")
+                    .setMessage("Разреши службе «Пара · управление Часами» читать элементы Часов и нажимать кнопки. После 18:00 МСК она сможет изменить первый будильник в разделе «Другие будильники» при разблокированном экране. Звук и повтор выбираешь ты.")
+                    .setNegativeButton("Отмена",null).setPositiveButton("Открыть настройки",(d,w)->{
+                        p.edit().putBoolean("autoClock",true).remove("autoAttempt").apply();
+                        if(ClockAccess.ready()){ClockAccess.refresh();draw();}
+                        else startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                    }).show());
+            }
+            if(automatic){
+                text(ClockAccess.ready()?p.getString("autoStatus","Ожидаю план подъёма"):"Включи службу «Пара · управление Часами» в специальных возможностях",15,ink);
+                if(ClockAccess.ready())button("Повторить проверку будильника",()->perform(()->{
+                    p.edit().remove("autoAttempt").remove("autoApplied").remove("autoReported").apply();Link.sync(this);
+                }));
+                button("Выключить автоизменение",()->{
+                    p.edit().putBoolean("autoClock",false).remove("autoAttempt").remove("autoApplied").remove("autoStatus").remove("autoReported").apply();
+                    ClockAccess.stopLocal();draw();
+                });
+            }
             button("Открыть штатные Часы",()->{
                 try{startActivity(NativeClock.open());
                     if(NativeClock.actionable(row)){p.edit().putString("opened",rev).commit();
                         Link.worker.execute(()->{try{Link.request(this,"opened",rev);}catch(Exception ignored){} });}
                 }catch(ActivityNotFoundException | SecurityException e){result(this,"Открой приложение «Часы» вручную.");draw();}
             });
-            text("Выбери первый будильник сверху. Проверь дату следующего звонка. В карточке будильника выбери время, мелодию, вибрацию и повтор.",15,ink);
-            if(NativeClock.actionable(row) && rev.equals(p.getString("opened","")) && !rev.equals(p.getString("confirmed","")))
+            if(!automatic)text("Выбери первый будильник сверху. Проверь дату следующего звонка. В карточке будильника выбери время, мелодию, вибрацию и повтор.",15,ink);
+            if(!automatic && NativeClock.actionable(row) && rev.equals(p.getString("opened","")) && !rev.equals(p.getString("confirmed","")))
                 button("Я сохранил изменение в Часах",()->perform(()->{Link.request(this,"confirmed",rev);p.edit().putString("confirmed",rev).apply();}));
             if(!rev.isEmpty() && rev.equals(p.getString("confirmed","")))text("Ты подтвердил сохранение в Часах",16,ink);
             button("Обновить расписание",()->perform(()->Link.sync(this)));

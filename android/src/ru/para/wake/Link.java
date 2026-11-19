@@ -92,6 +92,12 @@ final class Link {
     static void sync(Context c) throws Exception {
         JSONObject plan=request(c,"nativeplan","");
         NativeClock.receive(c,plan);
-        request(c,"received",plan.getString("revision"));
+        String rev=plan.getString("revision");
+        ClockAccess.refresh();
+        request(c,"received",rev);
+        if(rev.equals(prefs(c).getString("autoApplied","")) && !rev.equals(prefs(c).getString("autoReported",""))){
+            request(c,"applied",rev);
+            prefs(c).edit().putString("autoReported",rev).apply();
+        }
     }
 }
