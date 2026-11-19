@@ -25,7 +25,7 @@ public final class ClockAccess extends AccessibilityService {
         private Network online;
         public void onCapabilitiesChanged(Network n,NetworkCapabilities caps){
             if(caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)){
-                if(!n.equals(online)){online=n;handler.post(()->onAvailable(true));}
+                if(!n.equals(online)){online=n;handler.post(()->ClockAccess.this.onAvailable(true));}
             }else if(n.equals(online))online=null;
         }
         public void onLost(Network n){if(n.equals(online))online=null;}
