@@ -1,3 +1,4 @@
+import re
 import asyncio
 import hmac
 import json
@@ -98,7 +99,7 @@ class Bot:
             message += "\n\n" + st.get("source_error")
         toggle = "Выключить рассылку" if on else "Включить рассылку"
         return self.plan.screen("settings", message, [[LOGIN,"🔑 Войти в ИСУ"], [CLOCK, toggle], [INTERVAL],
-                              ["🚶 Дорога", "🗓 Сводка по воскресеньям"],["🌙 Тихие часы","⏰ Будильник"],["🔎 Проверить связь"]])
+                              ["🚶 Дорога", "🗓 Сводка по воскресеньям"],["🌙 Тихие часы","⏰ Будильник"],["🔔 Уведомления"],["🔎 Проверить связь"]])
 
     def begin_login(self, isu=False):
         if isu:
@@ -271,6 +272,28 @@ class Bot:
         if name=="weekly" and text in ("Включить сводку","Выключить сводку"):
             self.s.set("weekly_on",text=="Включить сводку")
             return self.settings()
+        if text=="Правила подъёма" or name in ("wake_slots","wake_start","wake_time") and text not in (BACK,HOME):
+            mapping=wake.rules(self.s.get("wake_rules",wake.DEFAULTS["wake_rules"]))
+            if text=="＋ Добавить пару":
+                return self.plan.screen("wake_start","Когда начинается пара? Введи ЧЧ:ММ.",[["11:30","13:30","15:20"],[BACK]])
+            if name=="wake_start" or name=="wake_slots" and text.startswith("К "):
+                start=text if name=="wake_start" else screen.get("choices",{}).get(text,"")
+                if not re.fullmatch(wake.CLOCK,start):
+                    return "Введи начало пары в формате ЧЧ:ММ.",self.s.get("keyboard",MAIN)
+                return self.plan.screen("wake_time",f"Пара в {start}. Выбери или введи время подъёма.",[["06:20","08:30"],["Удалить правило"],[BACK]],start=start)
+            if name=="wake_time":
+                start=screen["start"]
+                if text=="Удалить правило":
+                    mapping.pop(start,None)
+                elif re.fullmatch(wake.CLOCK,text) and text<start:
+                    mapping[start]=text
+                else:
+                    return "Подъём должен быть раньше пары. Введи ЧЧ:ММ.",self.s.get("keyboard",MAIN)
+                value=", ".join(k+"="+v for k,v in sorted(mapping.items()))
+                try: save_settings(self.s,{"wake_rules":value})
+                except ValueError as err: return str(err),self.s.get("keyboard",MAIN)
+            choices={f"К {i}-й · {t} → {v}":t for i,(t,v) in enumerate(sorted(mapping.items()),1)}
+            return self.plan.screen("wake_slots","Начало пары и время подъёма",[[k] for k in choices]+[["＋ Добавить пару"],[BACK]],choices=choices)
         if text=="⏰ Будильник" or name in ("wake","wake_input") and text not in (BACK, HOME):
             notice = ""
             fields = {"Время сборов":"wake_prep","До онлайн-пары":"wake_online","Правила подъёма":"wake_rules"}
@@ -282,10 +305,12 @@ class Bot:
                 elif text in fields:
                     message = "Введи правила через запятую, например 08:10=06:20, 09:50=08:30." if text=="Правила подъёма" else "Введи число минут от 0 до 240."
                     return self.plan.screen("wake_input",message,([["Сбросить правила"]] if text=="Правила подъёма" else [["20","40","60"]])+[[BACK]],field=fields[text])
-                elif text=="Привязать Honor":
+                elif text in (wake.PAIR_LABEL,"Привязать Honor"):
                     notice=wake.pair_text(self.s)
                 elif text=="Отозвать доступ":
                     wake.revoke(self.s)
+                elif text=="Выходной: менять режим":
+                    self.s.set("wake_free_off",not self.s.get("wake_free_off",False))
                 elif text=="Переключить будильник":
                     self.s.set("wake_on",not self.s.get("wake_on",False))
             except ValueError as err:
@@ -294,8 +319,17 @@ class Bot:
             details = (f"Будильник {mode}. Сборы: {self.s.get('wake_prep',40)} мин + дорога до корпуса. "
                        f"Онлайн: за {self.s.get('wake_online',20)} мин. Правила для очных пар: "
                        f"{self.s.get('wake_rules',wake.DEFAULTS['wake_rules']) or 'нет'}.")
+            details += "\nСвободный день · " + ("предложить выключение" if self.s.get("wake_free_off",False) else "оставить как есть")
             return self.plan.screen("wake",details+"\n"+wake.status(self.s)+"\n"+notice,
-                [["Переключить будильник","Привязать Honor"],["Время сборов","До онлайн-пары"],["Правила подъёма","Отозвать доступ"],[BACK]])
+                [["Переключить будильник",wake.PAIR_LABEL],["Время сборов","До онлайн-пары"],["Правила подъёма","Выходной: менять режим"],["Отозвать доступ"],[BACK]])
+        if text=="🔔 Уведомления" or name=="notice_types" and text!=BACK:
+            options={"Письма ИСУ":"notify_isu","Письма IMAP":"notify_imap","Баллы БаРС":"notify_bars","Изменения пар":"notify_schedule","Дедлайны":"notify_due","Дорога":"travel_on","Утренняя рассылка":"morning_on","Недельная сводка":"weekly_on"}
+            label=text.removeprefix("✓ ").removeprefix("○ ")
+            if label in options:
+                key=options[label]
+                self.s.set(key,not self.s.get(key,key!="travel_on"))
+            buttons=[("✓ " if self.s.get(key,key!="travel_on") else "○ ")+title for title,key in options.items()]
+            return self.plan.screen("notice_types","Выбери уведомления для Telegram.",pairs(buttons)+[[BACK]])
         if text=="🌙 Тихие часы" or (name=="quiet" and text!=BACK):
             if name=="quiet" and text!="🌙 Тихие часы":
                 if text=="Переключить режим":
@@ -317,7 +351,7 @@ class Bot:
                 [["23:00-07:00","22:00-08:00"],["Переключить режим","Исключение первой пары"],[BACK]])
         if text=="🔎 Проверить связь":
             return self.start_check(report=True), self.s.get("keyboard",MAIN)
-        if text == SETTINGS or (text == BACK and name in ("interval","clock","travel","weekly","campuses","quiet","wake","wake_input")):
+        if text == SETTINGS or (text == BACK and name in ("interval","clock","travel","weekly","campuses","quiet","wake","wake_input","wake_slots","wake_start","wake_time","notice_types")):
             return self.settings()
         if text in (TODAY,TOMORROW):
             if not self.s.get("connected"):

@@ -12,7 +12,7 @@ public class SyncJob extends JobService {
     public boolean onStartJob(JobParameters params){
         Link.worker.execute(()->{
             try{Link.sync(this);Main.result(this,"Синхронизация выполнена");}
-            catch(Exception e){Main.result(this,"Проверка отложена. Сохранённый будильник действует.");}
+            catch(Exception e){Main.result(this,"Проверка отложена. Проверь время в системных Часах.");}
             jobFinished(params,false);
         });
         return true;

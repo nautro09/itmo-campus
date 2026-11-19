@@ -11,7 +11,8 @@ from aiohttp import web
 from extras import onsite
 from itmo import MSK
 
-DEFAULTS = dict(wake_on=False, wake_prep=40, wake_online=20,
+PAIR_LABEL = "Привязать будильник телефона к расписанию"
+DEFAULTS = dict(wake_free_off=False, wake_on=False, wake_prep=40, wake_online=20,
                 wake_rules="08:10=06:20, 09:50=08:30")
 CLOCK = r"(?:[01]\d|2[0-3]):[0-5]\d"
 
@@ -70,6 +71,16 @@ def plan(store, now=None):
     return days
 
 
+def proposal(store, now=None):
+    days = plan(store, now)
+    if not store.get("wake_on",False):
+        return {"day":days[1]["day"],"action":"off"}
+    row = days[0] if days[0]["action"]=="set" else days[1]
+    if row["action"]=="cancel" and not store.get("wake_free_off",False):
+        return dict(row,action="free")
+    return row
+
+
 def digest(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -89,7 +100,7 @@ def pair_text(store):
         raise ValueError("Для привязки нужен действующий HTTPS-адрес приложения.")
     code = secrets.token_urlsafe(18)
     store.set("wake_pair", {"hash":digest(code), "until":time.time()+300})
-    return f"В приложении на Honor введи адрес и одноразовый код. Код действует 5 минут. Новая привязка заменяет прежний телефон.\n\n{origin}\n{code}"
+    return f"В приложении на телефоне введи адрес и одноразовый код. Код действует 5 минут. Новая привязка заменяет прежний телефон.\n\n{origin}\n{code}"
 
 
 def revoke(store):
@@ -129,6 +140,24 @@ def register(app, store):
             body = json.dumps(data,separators=(",",":")).encode()
             mac = hmac.digest(key.encode(),nonce.encode()+b"\n"+body,"sha256").hex()
             return web.Response(body=body,content_type="application/json",headers={"X-Wake-MAC":mac})
+        stages = {"received":"Телефон получил расчёт", "opened":"Открыты штатные Часы", "confirmed":"Пользователь подтвердил изменение в Часах"}
+        if op=="nativeplan" or op in stages:
+            row = proposal(store)
+            revision = digest(json.dumps(row,sort_keys=True))
+            if op=="nativeplan":
+                return reply({"proposal":row,"revision":revision})
+            if not hmac.compare_digest(revision,ack):
+                raise web.HTTPConflict()
+            if op!="received" and row["action"] not in ("set","cancel"):
+                raise web.HTTPConflict()
+            old = store.get("wake_ack") or {}
+            rank = list(stages).index(op)
+            if old.get("revision")!=revision or rank>old.get("rank",-1):
+                label = datetime.fromtimestamp(row["at"],MSK).strftime("%H:%M МСК") if "at" in row else {"free":"свободный день","cancel":"выключить","off":"режим выключен","keep":"сохранить прежнее время"}[row["action"]]
+                with store.db:
+                    store.set("wake_ack",{"revision":revision,"rank":rank,"time":datetime.now(MSK).strftime("%d.%m %H:%M МСК"),
+                                          "text":f"{stages[op]} · {row['day']} · {label}"})
+            return reply({"ok":True})
         days = plan(store)
         revision = digest(str(days))
         if op=="plan":
@@ -145,6 +174,6 @@ def register(app, store):
             text = "\n".join(messages)
             store.set("wake_ack",{"time":datetime.now(MSK).strftime("%d.%m %H:%M МСК"),"text":text})
             if old.get("text")!=text and any(row["action"]=="set" for row in days):
-                store.post(store.get("owner"),"⏰ Honor подтвердил будильник\n"+text,delivery="background")
+                store.post(store.get("owner"),"⏰ Приложение версии 1 подтвердило свой будильник\n"+text,delivery="background")
         return reply({"ok":True})
-    app.router.add_post("/device/{op:pair|plan|ack}",device)
+    app.router.add_post("/device/{op:pair|plan|ack|nativeplan|received|opened|confirmed}",device)

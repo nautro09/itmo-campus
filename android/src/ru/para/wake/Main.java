@@ -2,103 +2,78 @@ package ru.para.wake;
 
 import android.app.*;
 import android.app.job.JobScheduler;
-import android.os.*;
 import android.content.*;
-import android.graphics.*;
-import android.net.Uri;
-import android.provider.Settings;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.os.*;
 import android.text.InputType;
 import android.view.*;
 import android.widget.*;
-import java.time.*;
-import java.time.format.DateTimeFormatter;
-import java.util.*;
+import org.json.JSONObject;
 
 public class Main extends Activity {
-    private LinearLayout panel;
-    private EditText host, code;
-    private TextView status;
-    private Button pair, sync;
-    private boolean busy;
+    LinearLayout page,card; TextView message; boolean busy;
     int dp(int n){return Math.round(getResources().getDisplayMetrics().density*n);}
-    TextView label(String value,int size){
-        TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setTextColor(Color.rgb(29,42,37));
-        t.setPadding(0,dp(8),0,dp(6));panel.addView(t);return t;
+    void box(int color){
+        card=new LinearLayout(this);card.setOrientation(1); card.setPadding(dp(18),dp(12),dp(18),dp(15));
+        GradientDrawable bg=new GradientDrawable();bg.setColor(color);bg.setCornerRadius(dp(20));card.setBackground(bg);
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(12);page.addView(card,lp);
     }
-    Button button(String text,Runnable action){
-        Button b=new Button(this);b.setText(text);b.setAllCaps(false);b.setOnClickListener(v->action.run());panel.addView(b);return b;
+    TextView text(String value,int size,int color){
+        TextView v=new TextView(this);v.setText(value);v.setTextSize(size);v.setTextColor(color);v.setPadding(0,dp(4),0,dp(6));card.addView(v);return v;
     }
-    EditText input(String hint,int type){
-        EditText e=new EditText(this);e.setHint(hint);e.setInputType(type);e.setSingleLine();e.setSaveEnabled(false);panel.addView(e);return e;
+    Button button(String title,Runnable action){
+        Button b=new Button(this);b.setText(title);b.setAllCaps(false);b.setEnabled(!busy);card.addView(b);b.setOnClickListener(v->action.run());return b;
     }
-    public void onCreate(Bundle saved){
-        super.onCreate(saved);
-        ScrollView scroll=new ScrollView(this);panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(Color.rgb(243,248,242));panel.setPadding(dp(22),dp(36),dp(22),dp(40));
-        scroll.addView(panel);setContentView(scroll);
-        panel.setOnApplyWindowInsetsListener((v,insets)->{
-            panel.setPadding(dp(22),dp(20)+insets.getSystemWindowInsetTop(),dp(22),dp(28)+insets.getSystemWindowInsetBottom());
-            return insets;
-        });
-        label("Учебный будильник",30).setTypeface(Typeface.DEFAULT,Typeface.BOLD);
-        status=label("",17);
-        sync=button("Проверить расписание",()->run(false));
-        button("Проверить звук · 10 секунд",()->{
-            if(!notifications()){permission();return;}
-            startForegroundService(new Intent(this,Ring.class).setAction("TEST"));
-        });
-        button("Выключить звонок",()->stopService(new Intent(this,Ring.class)));
-        button("Разрешения будильника",this::permission);
-        label("Привязка к «Паре»",21);
-        label("В личном чате открой Настройки → Будильник → Привязать Honor. Адрес и код вводятся один раз.",15);
-        host=input("https://…",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
-        host.setText(Link.prefs(this).getString("site",""));
-        code=input("Одноразовый код",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        code.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
-        pair=button("Привязать и проверить",()->run(true));
-        button("Отключить этот телефон",()->new AlertDialog.Builder(this).setMessage("Удалить локальную привязку и будильники «Пары»?")
-            .setNegativeButton("Назад",null).setPositiveButton("Отключить",(d,w)->Link.worker.execute(()->{
-                getSystemService(JobScheduler.class).cancel(7);Alarms.clear(this);Link.prefs(this).edit().clear().commit();
-                stopService(new Intent(this,Ring.class));runOnUiThread(this::refresh);
-            })).show());
-        refresh();
+    EditText field(String hint,int type){
+        EditText f=new EditText(this);f.setSingleLine();f.setInputType(type);f.setSaveEnabled(false);f.setHint(hint);card.addView(f);return f;
     }
-    static void result(Context c,String message){
-        String time=LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
-        Link.prefs(c).edit().putString("status",time+" · "+message).apply();
-    }
-    boolean notifications(){return getSystemService(NotificationManager.class).areNotificationsEnabled();}
-    void permission(){
-        if(Build.VERSION.SDK_INT>=33 && !notifications()){requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},1);return;}
-        if(Build.VERSION.SDK_INT>=31 && !Alarms.exact(this)){
-            try{startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,Uri.parse("package:"+getPackageName())));}
-            catch(ActivityNotFoundException e){startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+getPackageName())));}
-        } else if(!notifications()){
-            startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,getPackageName()));
-        } else Toast.makeText(this,"Разрешения включены",Toast.LENGTH_SHORT).show();
-    }
-    void run(boolean pairing){
-        if(busy)return;
-        if(!notifications() || !Alarms.exact(this)){permission();return;}
-        final String site=host.getText().toString(), ticket=code.getText().toString().trim();
-        busy=true;refresh();status.setText("Проверяю связь…");
+    static void result(Context c,String msg){Link.prefs(c).edit().putString("status",msg).apply();}
+    interface Work{void run() throws Exception;}
+    void perform(Work w){
+        if(busy)return;busy=true;draw();
         Link.worker.execute(()->{
-            try{
-                if(pairing)Link.pair(this,site,ticket);
-                Link.sync(this);result(this,"Расписание проверено");
-            } catch(Exception e){result(this,"Проверка не завершена. Проверь адрес, код, сеть и разрешения.");}
-            runOnUiThread(()->{if(isDestroyed())return;busy=false;code.setText("");refresh();});
+            try{w.run();result(this,"Данные сохранены");}
+            catch(Exception e){result(this,"Не удалось подтвердить запрос. Проверь сеть и актуальность плана.");}
+            runOnUiThread(()->{busy=false;if(!isDestroyed())draw();});
         });
     }
-    protected void onResume(){super.onResume();if(status!=null)refresh();}
-    void refresh(){
-        boolean linked=Link.prefs(this).contains("cipher");
-        StringBuilder s=new StringBuilder(linked?"Телефон привязан":"Телефон не привязан");
-        for(String day:new TreeSet<>(Alarms.prefs(this).getAll().keySet())){
-            long at=Alarms.prefs(this).getLong(day,0);
-            if(at>System.currentTimeMillis())s.append("\n").append(Instant.ofEpochMilli(at).atZone(Alarms.MOSCOW).format(DateTimeFormatter.ofPattern("dd.MM · HH:mm 'МСК'")));
+    public void onCreate(Bundle b){super.onCreate(b);draw();}
+    public void onResume(){super.onResume();if(page!=null && Link.prefs(this).contains("cipher"))draw();}
+    void draw(){
+        int ink=0xff173b32;ScrollView scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(1);
+        page.setBackgroundColor(0xfff1f4ec);page.setPadding(dp(16),dp(40),dp(16),dp(32));scroll.addView(page);setContentView(scroll);
+        page.setOnApplyWindowInsetsListener((v,i)->{page.setPadding(dp(16),dp(16)+i.getSystemWindowInsetTop(),dp(16),dp(16)+i.getSystemWindowInsetBottom());return i;});
+        SharedPreferences p=Link.prefs(this);boolean linked=p.contains("cipher");JSONObject row=NativeClock.current(this);
+        String rev=p.getString("revision","");
+        box(ink);text("Пара  /  Подъём",17,0xffd4e6cc);
+        text("set".equals(row.optString("action"))?NativeClock.time(row):"Расписание",42,0xffddf69a).setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+        text(linked?row.optString("day")+"  ·  "+NativeClock.summary(row):"Подключи расписание из личного чата",16,0xffffffff);
+        box(0xffffffff);
+        if(linked){
+            button("Открыть штатные Часы",()->{
+                try{startActivity(NativeClock.open());
+                    if(NativeClock.actionable(row)){p.edit().putString("opened",rev).commit();
+                        Link.worker.execute(()->{try{Link.request(this,"opened",rev);}catch(Exception ignored){} });}
+                }catch(ActivityNotFoundException | SecurityException e){result(this,"Открой приложение «Часы» вручную.");p.edit().putString("opened",rev).apply();draw();}
+            });
+            text("Выбери первый будильник сверху. Проверь дату следующего звонка. В карточке будильника выбери время, мелодию, вибрацию и повтор.",15,ink);
+            if(NativeClock.actionable(row) && rev.equals(p.getString("opened","")) && !rev.equals(p.getString("confirmed","")))
+                button("Я сохранил изменение в Часах",()->perform(()->{Link.request(this,"confirmed",rev);p.edit().putString("confirmed",rev).apply();}));
+            if(!rev.isEmpty() && rev.equals(p.getString("confirmed","")))text("Ты подтвердил сохранение в Часах",16,ink);
+            button("Обновить расписание",()->perform(()->Link.sync(this)));
+            if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=0)
+                button("Разрешить уведомления о смене подъёма",()->requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},1));
+            button("Отключить телефон",()->new AlertDialog.Builder(this).setMessage("Удалить привязку на этом телефоне?").setNegativeButton("Назад",null)
+                .setPositiveButton("Отключить",(d,w)->perform(()->{getSystemService(JobScheduler.class).cancel(7);getSystemService(NotificationManager.class).cancel(9);p.edit().clear().commit();})).show());
+        }else{
+            text("Привязка телефона",22,ink);
+            text("В «Паре» открой профиль → Будильник и дорога → Привязать будильник телефона к расписанию.",15,ink);
+            EditText host=field("HTTPS-адрес",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
+            EditText code=field("Одноразовый код",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            code.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+            button("Привязать телефон",()->{String url=host.getText().toString(),ticket=code.getText().toString().trim();perform(()->{Link.pair(this,url,ticket);Link.sync(this);});});
         }
-        s.append("\n").append(Link.prefs(this).getString("status",""));
-        status.setText(s);sync.setEnabled(linked && !busy);pair.setEnabled(!busy);
+        message=text(busy?"Проверяю…":p.getString("status",""),14,ink);
     }
 }

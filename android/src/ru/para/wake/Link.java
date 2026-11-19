@@ -80,15 +80,18 @@ final class Link {
             .putString("cipher",Base64.encodeToString(cipher.doFinal(bytes(deviceKey)),2)).commit()) throw new IOException("Не удалось сохранить привязку.");
         SyncJob.enable(c);
     }
-    static void sync(Context c) throws Exception {
+    static JSONObject request(Context c,String op,String revision) throws Exception {
         SharedPreferences p=prefs(c);
         if(!p.contains("cipher")) throw new IOException("Сначала привяжи телефон.");
         Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Base64.decode(p.getString("iv",""),2)));
         String credential=new String(cipher.doFinal(Base64.decode(p.getString("cipher",""),2)),StandardCharsets.UTF_8);
         String site=origin(p.getString("site",""));
-        JSONObject plan=call(site,"plan",credential,"");
-        Alarms.apply(c,plan.getJSONArray("days"));
-        call(site,"ack",credential,plan.getString("revision"));
+        return call(site,op,credential,revision);
+    }
+    static void sync(Context c) throws Exception {
+        JSONObject plan=request(c,"nativeplan","");
+        NativeClock.receive(c,plan);
+        request(c,"received",plan.getString("revision"));
     }
 }

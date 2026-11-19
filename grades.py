@@ -23,7 +23,7 @@ def scores(rows):
             value = format(number.normalize(), "f")
         else:
             value = "—"
-        result[key] = {"name": row["name"], "score": value}
+        result[key] = {"name": row["name"], "score": value,"grade":str(row.get("rate") or "—")}
     return result
 
 
@@ -49,12 +49,15 @@ class Grades:
                 changes = []
                 for key, row in current.items():
                     old = prior.get(key, {}).get("score", "—")
+                    previous_row=prior.get(key,{})
+                    if same and "grade" in previous_row and previous_row["grade"]!=row["grade"]:
+                        changes.append(f"{row['name']} · оценка {previous_row['grade']} → {row['grade']}")
                     if same and old != row["score"]:
                         changes.append(f"{row['name']} · {old} → {row['score']}")
                 with self.s.db:
                     self.s.set("bars_snapshot", {"scope": scope, "rows": current, "known": {**prior, **current}})
                     self.s.set("bars_status", "Проверено " + datetime.now(MSK).strftime("%d.%m в %H:%M МСК"))
-                    if changes:
+                    if changes and self.s.get("notify_bars",True):
                         self.s.post(self.s.get("owner"), "📈 Изменения в БаРС\n" + "\n".join(changes), delivery="background")
             except (ValueError, TypeError, KeyError, InvalidOperation, SourceError) as exc:
                 with self.s.db:

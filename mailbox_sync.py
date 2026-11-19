@@ -140,7 +140,7 @@ class ImapSource:
                 imap.authenticate("XOAUTH2",lambda _:f"user={self.user}\x01auth=Bearer {self.access}\x01\x01".encode())
             else:
                 imap.login(self.user,os.environ.get("IMAP_PASSWORD",""))
-            status,_ = imap.select('"'+self.folder.replace('\\','\\\\').replace('"','\\"')+'"',readonly=True)
+            status,counts = imap.select('"'+self.folder.replace('\\','\\\\').replace('"','\\"')+'"',readonly=True)
             if status != "OK":
                 raise SourceError("Почтовая папка не найдена.")
             validity = (imap.response("UIDVALIDITY")[1] or [None])[0]
@@ -149,7 +149,13 @@ class ImapSource:
             scope = self.identity+":"+validity.decode()
             same = cursor and cursor["scope"]==scope
             last = int(cursor["uid"]) if same else 0
-            status, data = imap.uid("search",None,"UID",f"{last+1}:*" if same else "1:*")
+            if same:
+                status, data = imap.uid("search",None,"UID",f"{last+1}:*")
+            elif counts and int(counts[0])>0:
+                status, data = imap.uid("search",None,f"{max(1,int(counts[0])-19)}:*")
+            else:
+                data = [b""]
+
             if status!="OK":
                 raise SourceError("Не удалось загрузить список писем.")
             ids = [int(i) for i in data[0].split() if int(i)>last]
@@ -185,7 +191,7 @@ class Mail:
         for x in messages:
             created = self.s.db.execute("INSERT OR IGNORE INTO mail(source,source_id,sender,subject,body,date) VALUES (?,?,?,?,?,?)",
                                         (src,x["key"],x["sender"],x["subject"],x["body"],x["date"])).rowcount
-            if created and notify and self.s.get("mail_on",True) and self.s.get("owner"):
+            if created and notify and self.s.get("notify_isu" if src=="ИСУ" else "notify_imap",True) and self.s.get("mail_on",True) and self.s.get("owner"):
                 self.s.post(self.s.get("owner"),f"✉️ {src} · {x['sender']}\n{x['subject']}\n\n{x['body'] or 'Текст отсутствует.'}", delivery="background")
 
     def statuses(self):
@@ -193,7 +199,11 @@ class Mail:
             if not enabled:
                 return {"ok":False, "detail":missing}
             value = self.s.get(key+"_status", {"ok":False, "detail":"Ожидает первой проверки"})
-            return {**value, "detail": ("Подключено · " if value["ok"] else "Последняя проверка · ") + value["detail"]}
+            detail = ("Подключено · " if value["ok"] else "Последняя проверка · ") + value["detail"]
+            last = self.s.get(key+"_last_success")
+            if not value["ok"] and last:
+                detail += " · Последняя успешная синхронизация " + last
+            return {**value, "detail":detail}
         isu = status("isu", self.s.get("isu_connected"), "Войти можно кнопкой «Войти в ИСУ»")
         if self.signing_in:
             isu = {"ok":False,"detail":"Ожидаю входа в окне Chromium"}
@@ -240,6 +250,8 @@ class Mail:
                 detail = str(exc) if isinstance(exc,SourceError) else "Проверь доступ к почте, сеть и настройки входа."
         with self.s.db:
             self.s.set(key+"_status",dict(ok=ok,detail=detail))
+            if ok:
+                self.s.set(key+"_last_success",datetime.now(MSK).strftime("%d.%m %H:%M МСК"))
 
     async def run(self):
         while True:

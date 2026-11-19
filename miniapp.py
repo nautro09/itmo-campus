@@ -14,7 +14,7 @@ from itmo import MSK
 from planner import REMIND
 
 WEB = Path(__file__).resolve().parent/"web"
-DEFAULTS = dict(**wake.DEFAULTS,quiet_on=True,quiet_start="23:00",quiet_end="07:00",quiet_first=True,theme="paper",morning_on=True,morning_time="07:30",interval=1,travel_on=False,
+DEFAULTS = dict(**wake.DEFAULTS,notify_isu=True,notify_imap=True,notify_bars=True,notify_schedule=True,notify_due=True,quiet_on=True,quiet_start="23:00",quiet_end="07:00",quiet_first=True,theme="paper",morning_on=True,morning_time="07:30",interval=1,travel_on=False,
                 travel_minutes=35,campus_minutes={},weekly_on=True,mail_on=True)
 
 
@@ -61,7 +61,7 @@ def state(bot):
     stale = bool(s.get("source_error"))
     latest = set(s.get("latest_dates", []))
     pending = bot.check_job is not None and not bot.check_job.done()
-    return dict(wake_status=wake.status(s), campuses=campus_names(s,cache), bars=bot.grades.report(), check_pending=pending, today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
+    return dict(wake_preview=wake.proposal(s,now),wake_status=wake.status(s), campuses=campus_names(s,cache), bars=bot.grades.report(), check_pending=pending, today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
                 settings={k:s.get(k,v) for k,v in DEFAULTS.items()},services=statuses,
                 days=[dict(date=d,lessons=item["lessons"],checked=item["checked"],stale=bool(stale or d not in latest or item["checked"][:10]!=now.date().isoformat())) for d,item in sorted(cache.items()) if d>=now.date().isoformat()],
                 tasks=tasks,categories=[r[0] for r in s.db.execute("SELECT name FROM categories ORDER BY name")],

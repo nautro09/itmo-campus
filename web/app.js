@@ -185,7 +185,7 @@
     const today=dayData(state.today),open=tasksSorted().filter(t=>!t.done);
     const mini=open.slice(0,4).map(t=>`<div class="task-mini">${checkButton("task-done",t)}<button type="button" class="mini-content" data-action="open-task" data-id="${esc(t.id)}"><b class="task-title">${esc(t.title)}</b><small>${esc(dueText(t.due))} &nbsp;·&nbsp; ${esc(t.category||"Без категории")}</small></button></div>`).join("");
     return mast("Сегодня",cap(dateFmt(state.today,{weekday:"long",day:"numeric",month:"long"})),iconBtn("refresh","Обновить расписание","refresh"))+
-      (state.warning?`<p class="alert">${esc(state.warning)}</p>`:"")+hero()+
+      (state.warning?`<p class="alert">${esc(state.warning)}</p>`:"")+hero()+(state.wake_preview?.action==="set"?`<div class="wake-summary">Расчёт подъёма · ${esc(state.wake_preview.day)} · <b>${new Date(state.wake_preview.at*1000).toLocaleTimeString("ru-RU",{timeZone:"Europe/Moscow",hour:"2-digit",minute:"2-digit"})} МСК</b></div>`:"")+
       `<div class="dash-grid"><section class="panel">${section("Расписание на день",tabLink("week","На неделю"))}${lessonList(today)}</section><section class="panel">${section("Ближайшие дедлайны",tabLink("tasks","Все"))}${mini||empty("Всё под контролем","Открытых заданий пока нет.",btn("new-task","Добавить задание","plus","minor"))}</section></div>`;
   }
   function loadData(d){
@@ -251,6 +251,15 @@
       return `<label class="setting campus-setting"><span><b>${esc(building)}</b><small>Пустое поле · общее время ${defaultMinutes} мин</small></span><input type="number" min="1" max="240" step="1" data-campus="${esc(building)}" placeholder="${defaultMinutes}" value="${esc(value)}" aria-label="Время в пути в минутах — ${esc(building)}"></label>`;
     }).join("");
   }
+  let profilePage="wake";
+  function ruleRow(start="",wake="",index=0){
+    return `<div class="rule-row"><b>К ${index+1}-й паре</b><label>Начало<input type="time" required name="pair_start" value="${esc(start)}"></label><label>Подъём<input type="time" required name="pair_wake" value="${esc(wake)}"></label>${iconBtn("remove-rule","Удалить правило","close")}</div>`;
+  }
+  function ruleEditor(){
+    const entries=(state.settings.wake_rules??"08:10=06:20, 09:50=08:30").split(",").filter(v=>v.trim());
+    modal("Время по парам",`<form class="form" data-form="wake-rules"><div class="rule-list">${entries.map((v,i)=>ruleRow(...v.trim().split("="),i)).join("")}</div>
+    ${btn("add-rule","Добавить пару","plus","minor")}<p class="meta">Если правила для начала занятия нет, учитываются сборы и дорога.</p><button class="btn primary">Сохранить</button></form>`);
+  }
   function profile(){
     const s=state.settings,person=state.profile||{},services=state.services;
     const status=[["itmo","my.itmo","compass"],["isu","Входящие ИСУ","message"],["mail","Учебная почта","mail"],["telegram","Telegram","send"]].map(([k,label,icon])=>{
@@ -258,7 +267,18 @@
     }).join("");
     const variants=Object.entries(themes).map(([k,v])=>`<button type="button" class="theme ${(s.theme||"paper")===k?"selected":""}" aria-pressed="${(s.theme||"paper")===k}" data-action="theme" data-value="${k}"><i class="swatch" aria-hidden="true">${v.slice(1).map(c=>`<i style="background:${c}"></i>`).join("")}</i><span>${v[0]}</span></button>`).join("");
     const interval=[0,1,5,15,30].map(n=>`<option value="${n}" ${Number(s.interval)===n?"selected":""}>${n?n+" мин":"Выключено"}</option>`).join("");
-    return mast("Профиль","ИТМО ID, подключения и настройки")+`<div class="profile-grid"><div class="stack"><section class="panel"><div class="person"><span class="avatar-box">${esc(initials(person.name))}</span><div><h2>${esc(person.name||"Профиль ИТМО ID")}</h2><p class="meta">${person.isu?"ИСУ "+esc(person.isu):"Номер ИСУ пока не получен"}</p></div></div><div class="panel-actions btn-row">${btn("bars-check","Баллы БаРС","file","minor")}${btn("itmo-login","Войти в my.itmo","compass","minor")}${btn("isu-login","Войти в ИСУ","mail","minor")}</div></section><section class="panel">${section("Подключения",iconBtn("check-services","Проверить подключения","refresh"))}<div class="service-list">${status}</div></section><section class="panel">${section("Оформление")}<div class="themes">${variants}</div></section></div><section class="panel">${section("Уведомления")}<div class="settings-list">${switchSetting("wake_on","Будильник на Honor",state.wake_status||"Телефон не привязан")}${[["wake_prep","Сборы перед очной парой",40],["wake_online","Подъём до онлайн-пары",20]].map(([key,label,n])=>`<label class="setting"><span><b>${label}</b><small>В минутах</small></span><input type="number" min="0" max="240" required data-setting="${key}" value="${esc(s[key]??n)}"></label>`).join("")}<label class="setting"><span><b>Точное время для очных пар</b><small>Начало=подъём, через запятую. Пусто — сборы плюс дорога.</small></span><input data-setting="wake_rules" maxlength="500" value="${esc(s.wake_rules??"08:10=06:20, 09:50=08:30")}"></label><div class="btn-row">${btn("wake-pair","Привязать Honor","clock","minor")}${btn("wake-revoke","Отозвать доступ","close","minor")}</div>${switchSetting("quiet_on","Тихие часы","Фоновые уведомления придут сводкой в конце интервала по Москве.")}${[["quiet_start","Начало тишины","23:00"],["quiet_end","Конец тишины","07:00"]].map(([key,label,fallback])=>`<label class="setting"><b>${label}</b><input type="time" data-setting="${key}" value="${esc(s[key]||fallback)}" required></label>`).join("")}${switchSetting("quiet_first","Изменения первой пары сразу")}${switchSetting("morning_on","Утреннее расписание")}<label class="setting"><span><b>Время рассылки</b><small>По Москве</small></span><input data-setting="morning_time" type="time" required value="${esc(s.morning_time||"07:30")}"></label><label class="setting"><span><b>Проверять изменения</b><small>На ближайшие семь дней</small></span><select data-setting="interval">${interval}</select></label>${switchSetting("travel_on","Пора выходить","Напоминание перед первой очной парой.")}<label class="setting"><span><b>Общее время дороги</b><small>В минутах, для всех корпусов</small></span><input min="1" max="240" step="1" type="number" data-setting="travel_minutes" value="${esc(s.travel_minutes??35)}" required></label>${campusFields()}${switchSetting("weekly_on","Недельная сводка","По воскресеньям в 18:00 МСК · пары и дедлайны.")}${switchSetting("mail_on","Письма в Telegram")}</div></section></div>`;
+    const groups=[
+      ["wake","Будильник и дорога",`${switchSetting("wake_on","Связать подъём с расписанием",state.wake_status||"Телефон не привязан")}${[["wake_prep","Сборы перед очной парой",40],["wake_online","Подъём до онлайн-пары",20]].map(([key,label,n])=>`<label class="setting"><span><b>${label}</b><small>В минутах</small></span><input type="number" min="0" max="240" required data-setting="${key}" value="${esc(s[key]??n)}"></label>`).join("")}${btn("wake-rules","Время по парам","clock","minor")}<div class="btn-row">${btn("wake-pair","Привязать будильник телефона к расписанию","clock","minor")}${btn("wake-revoke","Отозвать доступ","close","minor")}</div>${switchSetting("wake_free_off","В свободный день предложить выключить первый будильник")}${switchSetting("travel_on","Пора выходить","Напоминание перед первой очной парой.")}<label class="setting"><span><b>Общее время дороги</b><small>В минутах, для всех корпусов</small></span><input min="1" max="240" step="1" type="number" data-setting="travel_minutes" value="${esc(s.travel_minutes??35)}" required></label>${campusFields()}`],
+      ["alerts","Уведомления",`${switchSetting("quiet_on","Тихие часы","Фоновые уведомления придут сводкой в конце интервала по Москве.")}${[["quiet_start","Начало тишины","23:00"],["quiet_end","Конец тишины","07:00"]].map(([key,label,fallback])=>`<label class="setting"><b>${label}</b><input type="time" data-setting="${key}" value="${esc(s[key]||fallback)}" required></label>`).join("")}${switchSetting("quiet_first","Изменения первой пары сразу")}${switchSetting("morning_on","Утреннее расписание")}<label class="setting"><span><b>Время рассылки</b><small>По Москве</small></span><input data-setting="morning_time" type="time" required value="${esc(s.morning_time||"07:30")}"></label>${switchSetting("weekly_on","Недельная сводка")}${switchSetting("mail_on","Пересылка почты")}
+        ${[["notify_isu","Входящие ИСУ"],["notify_imap","Входящие IMAP"],["notify_bars","Изменения баллов БаРС"],["notify_schedule","Переносы и отмены занятий"],["notify_due","Дедлайны"]].map(([k,v])=>switchSetting(k,v)).join("")}`],
+      ["accounts","Аккаунты и синхронизация",`<div class="service-list">${status}</div><div class="btn-row">${btn("check-services","Проверить связь","refresh","minor")}${btn("itmo-login","Войти в my.itmo","compass","minor")}${btn("isu-login","Войти в ИСУ","mail","minor")}</div><label class="setting"><span><b>Проверять изменения</b><small>На ближайшие семь дней</small></span><select data-setting="interval">${interval}</select></label>`],
+      ["themes","Оформление",`<div class="themes">${variants}</div>`]
+    ];
+    const active=groups.find(([id])=>id===profilePage)||groups[0];
+    return mast("Профиль",person.isu?"ИСУ "+person.isu:"Личный кабинет")+
+      `<section class="panel person profile-person"><span class="avatar-box">${esc(initials(person.name))}</span><h2>${esc(person.name||"ИТМО ID")}</h2>${btn("bars-check","Баллы БаРС","file","minor")}</section>
+      <div class="preferences"><nav aria-label="Разделы профиля">${groups.map(([id,title])=>`<button data-action="profile-page" data-value="${id}" aria-pressed="${active[0]===id}">${title}</button>`).join("")}</nav><section class="panel"><h2>${active[1]}</h2><div class="settings-list">${active[2]}</div></section></div>`;
+
   }
   function render(){shell();main.innerHTML=({today,week,tasks,mail,profile})[tab]()}
   function go(next){if(!Object.hasOwn(names,next)||!state)return;tab=next;const dest="#"+next;if(location.hash!==dest)history.replaceState(null,"",dest);render();window.scrollTo({top:0,behavior:"instant"})}
@@ -282,7 +302,11 @@
     switch(action){
     case "refresh":await perform("refresh",{},{message:s=>s.warning||(!s.services.itmo?.ok||s.days.find(d=>d.date===s.today)?.stale?"Свежесть расписания не подтверждена. Проверь подключение в профиле.":"Соединение с my.itmo подтверждено.")});break;
     case "check-services":await perform("check_services",{},{message:s=>"Подтверждённых подключений: "+Object.values(s.services).filter(v=>v?.ok).length+". Подробности в списке подключений."});break;
-    case "wake-pair":await perform("wake_pair",{},{long:true,title:"Привязка Honor"});break;
+    case "profile-page":profilePage=value;render();break;
+    case "wake-rules":ruleEditor();break;
+    case "add-rule":{const list=dialog.querySelector(".rule-list");if(list.children.length<30)list.insertAdjacentHTML("beforeend",ruleRow("","",list.children.length));break}
+    case "remove-rule":el.closest(".rule-row").remove();dialog.querySelectorAll(".rule-row>b").forEach((v,i)=>v.textContent="К "+(i+1)+"-й паре");break;
+    case "wake-pair":await perform("wake_pair",{},{long:true,title:"Привязка телефона"});break;
     case "wake-revoke":await perform("wake_revoke");break;
     case "bars-check":await perform("bars_check",{},{long:true,title:"Баллы БаРС"});break;
     case "week-report":await perform("week_report",{},{long:true,title:"Недельная сводка"});break;
@@ -325,6 +349,11 @@
     const form=e.target;if(!form.dataset.form)return;e.preventDefault();if(busy||!form.reportValidity())return;
     const data=new FormData(form);const str=k=>String(data.get(k)||"").trim();
     switch(form.dataset.form){
+    case "wake-rules":{
+      const starts=data.getAll("pair_start"),wakes=data.getAll("pair_wake");
+      if(new Set(starts).size!==starts.length || wakes.some((v,i)=>v>=starts[i])){notify("Время начала должно быть уникальным, а подъём — раньше пары.");break}
+      await perform("settings",{wake_rules:starts.map((v,i)=>v+"="+wakes[i]).join(", ")},{close:true,message:"Правила подъёма сохранены."});break;
+    }
     case "step":await perform("step_add",{task_id:Number(form.dataset.id),title:str("step")},{message:"Подзадача добавлена."});break;
     case "task":{
       const p={title:str("title"),category:str("category"),due:str("day")+" "+str("time"),lead:Number(str("lead"))};

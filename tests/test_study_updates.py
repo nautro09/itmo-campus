@@ -46,3 +46,23 @@ class StudyTests(unittest.IsolatedAsyncioTestCase):
         await bot.route("А")
         await bot.route("45")
         self.assertEqual(self.store.get("campus_minutes"), {"А":45})
+
+
+    async def test_grade_change_mute_and_keyboard_rules(self):
+        portal=AsyncMock()
+        def book(score,grade):
+            return ["p", [{"est_id":1,"name":"Физика","current_score":score,"rate":grade}]]
+        portal.record_book.side_effect=[book(15,None),book(15,"зачёт"),book(18,"зачёт")]
+        await Grades(self.store,portal).sync()
+        await Grades(self.store,portal).sync()
+        self.store.set("notify_bars",False)
+        await Grades(self.store,portal).sync()
+        messages=self.store.db.execute("SELECT text FROM outbox").fetchall()
+        self.assertEqual(len(messages),1)
+        self.assertIn("зачёт",messages[0][0])
+        bot=Bot(self.store,None)
+        await bot.route("Правила подъёма")
+        await bot.route("＋ Добавить пару")
+        await bot.route("11:30")
+        await bot.route("09:10")
+        self.assertIn("11:30=09:10",self.store.get("wake_rules"))

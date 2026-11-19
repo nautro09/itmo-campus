@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from itmo import MSK
 from miniapp import application, save_settings
 from store import Store
-from wake import digest, pair_text, plan, revoke, rules
+from wake import proposal, digest, pair_text, plan, revoke, rules
 
 
 class WakeTests(unittest.IsolatedAsyncioTestCase):
@@ -45,6 +45,16 @@ class WakeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan(self.s,self.now)[1]["action"],"keep")
         with self.assertRaises(ValueError):rules("08:10=08:30")
 
+    def test_native_day_off_is_opt_in(self):
+        self.put([])
+        self.assertEqual(proposal(self.s,self.now)["action"],"free")
+        self.s.set("wake_free_off",True)
+        self.assertEqual(proposal(self.s,self.now)["action"],"cancel")
+        self.s.set("source_error","offline")
+        self.assertEqual(proposal(self.s,self.now)["action"],"keep")
+        self.s.set("wake_on",False)
+        self.assertEqual(proposal(self.s,self.now)["action"],"off")
+
     async def test_device_scope_and_auth(self):
         self.s.set("wake_origin","https://campus.example")
         code=pair_text(self.s).splitlines()[-1]
@@ -69,5 +79,13 @@ class WakeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(set(data),{"days","revision"})
             sig,h=headers("ack",data["revision"])
             self.assertEqual((await post("/device/ack",sig,**h)).status,200)
+            nsig,nh=headers("nativeplan")
+            native=await (await post("/device/nativeplan",nsig,**nh)).json()
+            rev=native["revision"]
+            nsig,nh=headers("received",rev)
+            self.assertEqual((await post("/device/received",nsig,**nh)).status,200)
+            self.assertIn("получил",self.s.get("wake_ack")["text"])
+            nsig,nh=headers("confirmed",rev)
+            self.assertEqual((await post("/device/confirmed",nsig,**nh)).status,409)
             revoke(self.s)
             self.assertEqual((await post("/device/ack",sig,**h)).status,401)

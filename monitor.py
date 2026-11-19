@@ -34,7 +34,7 @@ class Monitor:
             old = {d:item["lessons"] for d, item in cached.items()}
             edits = changes(old, week, include_lessons=True) if self.s.get("interval", 1) else []
             with self.s.db:
-                if edits:
+                if edits and self.s.get("notify_schedule",True):
                     first = set()
                     for days in (old, week):
                         for date, lessons in days.items():
@@ -111,7 +111,8 @@ class Monitor:
                 due = datetime.fromisoformat(t["due"]).replace(tzinfo=MSK)
                 if now >= due - timedelta(minutes=t["lead"]):
                     title = "Срок прошёл" if now > due + timedelta(minutes=1) else "Напоминание"
-                    self.s.post(chat, f"⏰ {title} · #{t['id']}\n{t['title']}\n{t['category']} · {due:%d.%m.%Y в %H:%M} МСК", delivery="background")
+                    if self.s.get("notify_due",True):
+                        self.s.post(chat, f"⏰ {title} · #{t['id']}\n{t['title']}\n{t['category']} · {due:%d.%m.%Y в %H:%M} МСК", delivery="background")
                     self.s.db.execute("UPDATE tasks SET reminded=1 WHERE id=?", (t["id"],))
         if self.should_fetch(now):
             await self.fetch(automatic=True)
