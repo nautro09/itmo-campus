@@ -3,111 +3,162 @@ package ru.para.wake;
 import android.graphics.Rect;
 import android.view.accessibility.AccessibilityNodeInfo;
 import java.util.*;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Controls exposed by the Russian MagicOS Clock. Never tap guessed screen coordinates. */
 final class ClockUi {
-    static final Pattern TIME=Pattern.compile("(?:[01]?\\d|2[0-3]):[0-5]\\d");
+    private static final Pattern TIME = Pattern.compile("(?<![0-9])([01]?[0-9]|2[0-3]):([0-5][0-9])(?![0-9])");
+    private static final Pattern NUMBER = Pattern.compile("(?iu)^([0-9]{1,2})(?:\\s*(?:ч|час(?:а|ов)?|мин(?:ут(?:а|ы)?)?)\\.?)?$");
+
     static List<AccessibilityNodeInfo> tree(AccessibilityNodeInfo root){
-        ArrayList<AccessibilityNodeInfo> result=new ArrayList<>();
-        result.add(root);
-        for(int i=0;i<result.size();i++){
-            AccessibilityNodeInfo node=result.get(i);
-            for(int j=0;j<node.getChildCount();j++){
-                AccessibilityNodeInfo child=node.getChild(j);
-                if(child!=null && child.isVisibleToUser())result.add(child);
-                if(result.size()>600)throw new IllegalStateException("Слишком много элементов в Часах");
+        List<AccessibilityNodeInfo> nodes=new ArrayList<>();
+        nodes.add(root);
+        for(int i=0;i<nodes.size();i++){
+            AccessibilityNodeInfo parent=nodes.get(i);
+            for(int j=0;j<parent.getChildCount();j++){
+                AccessibilityNodeInfo child=parent.getChild(j);
+                if(child!=null && child.isVisibleToUser())nodes.add(child);
+                if(nodes.size()>800)throw new IllegalStateException("Слишком много элементов в Часах");
             }
         }
-        return result;
+        return nodes;
     }
-    static String text(AccessibilityNodeInfo n){return n.getText()==null?"":n.getText().toString().trim();}
-    static String desc(AccessibilityNodeInfo n){return n.getContentDescription()==null?"":n.getContentDescription().toString().trim();}
+    static String text(AccessibilityNodeInfo n){return clean(n.getText());}
+    static String desc(AccessibilityNodeInfo n){return clean(n.getContentDescription());}
+    static String clean(CharSequence value){
+        return value==null?"":value.toString().replace('\u00a0',' ').replace('\u202f',' ').replace("\u200e","").replace("\u200f","").trim();
+    }
     static Rect bounds(AccessibilityNodeInfo n){Rect r=new Rect();n.getBoundsInScreen(r);return r;}
     static String id(AccessibilityNodeInfo n){
         String id=n.getViewIdResourceName();return id==null?"":id.substring(id.lastIndexOf('/')+1).toLowerCase(Locale.ROOT);
     }
-    static AccessibilityNodeInfo label(List<AccessibilityNodeInfo> nodes,String label){
-        for(AccessibilityNodeInfo n:nodes)if(text(n).equalsIgnoreCase(label)||desc(n).equalsIgnoreCase(label))return n;
+    static AccessibilityNodeInfo label(List<AccessibilityNodeInfo> nodes,String name){
+        for(AccessibilityNodeInfo n:nodes)if(text(n).equalsIgnoreCase(name)||desc(n).equalsIgnoreCase(name))return n;
         return null;
+    }
+    private static String rowTime(AccessibilityNodeInfo node){
+        for(String value:new String[]{text(node),desc(node)}){
+            Matcher clock=TIME.matcher(value);
+            if(!clock.find())continue;
+            String hour=clock.group(1);
+            String time=(hour.length()==1?"0":"")+hour+":"+clock.group(2);
+            if(clock.find())return "";
+            return time;
+        }
+        return "";
     }
     static final class Row{
         final String time;
         final AccessibilityNodeInfo open,toggle;
-        Row(String time,AccessibilityNodeInfo open,AccessibilityNodeInfo toggle){this.time=time;this.open=open;this.toggle=toggle;}
-    }
-    static String normalized(String value){return value.length()==4?"0"+value:value;}
-    static List<Row> rows(List<AccessibilityNodeInfo> nodes){
-        List<Row> rows=new ArrayList<>();
-        AccessibilityNodeInfo header=label(nodes,"Другие будильники");
-        if(header==null)return rows;
-        int top=bounds(header).bottom;
-        for(AccessibilityNodeInfo n:nodes){
-            String time=text(n);
-            if(!TIME.matcher(time).matches() || bounds(n).centerY()<top)continue;
-            AccessibilityNodeInfo ancestor=n;
-            for(int depth=0;ancestor!=null && depth<6;depth++,ancestor=ancestor.getParent()){
-                if(bounds(ancestor).top<top)break;
-                List<AccessibilityNodeInfo> children=tree(ancestor);
-                AccessibilityNodeInfo toggle=null,open=null;
-                int times=0,switches=0;
-                for(AccessibilityNodeInfo c:children){
-                    if(TIME.matcher(text(c)).matches())times++;
-                    if(c.isCheckable()){switches++;toggle=c;}
-                }
-                if(times>1 || switches>1)break;
-                if(switches!=1)continue;
-                for(AccessibilityNodeInfo a=n;a!=null;a=a.getParent()){
-                    if(a.isClickable() && !a.isCheckable()){open=a;break;}
-                    if(a.equals(ancestor))break;
-                }
-                if(open==null && ancestor.isClickable())open=ancestor;
-                rows.add(new Row(normalized(time),open,toggle));break;
-            }
-            // If the top time has no recognisable control, do not silently skip to the next alarm.
-            boolean found=false;
-            for(Row r:rows)if(r.time.equals(normalized(time)))found=true;
-            if(!found)return Collections.emptyList();
+        final boolean once;
+        Row(String time,AccessibilityNodeInfo open,AccessibilityNodeInfo toggle,boolean once){
+            this.time=time;this.open=open;this.toggle=toggle;this.once=once;
         }
+    }
+    static List<Row> rows(List<AccessibilityNodeInfo> nodes){
+        AccessibilityNodeInfo header=label(nodes,"Другие будильники");
+        if(header==null)return Collections.emptyList();
+        int top=bounds(header).bottom;
+        Map<AccessibilityNodeInfo,Row> found=new HashMap<>();
+        for(AccessibilityNodeInfo n:nodes){
+            String time=rowTime(n);
+            if(time.isEmpty() || n.isCheckable() || bounds(n).top<top)continue;
+            Row row=identify(n,time,top);
+            if(row==null)return Collections.emptyList();
+            Row previous=found.get(row.toggle);
+            if(previous==null || previous.open==null)found.put(row.toggle,row);
+        }
+        List<Row> rows=new ArrayList<>(found.values());
         rows.sort(Comparator.comparingInt(r->bounds(r.toggle).centerY()));
         return rows;
+    }
+    private static Row identify(AccessibilityNodeInfo timeNode,String time,int top){
+        AccessibilityNodeInfo opener=null;
+        for(AccessibilityNodeInfo parent=timeNode;parent!=null && bounds(parent).top>=top;parent=parent.getParent()){
+            if(opener==null && parent.isClickable() && !parent.isCheckable())opener=parent;
+            AccessibilityNodeInfo toggle=null;
+            boolean once=false;
+            for(AccessibilityNodeInfo n:tree(parent)){
+                if(n.isCheckable()){
+                    if(toggle!=null)return null;
+                    toggle=n;
+                }
+                String other=rowTime(n);
+                if(!other.isEmpty() && !other.equals(time))return null;
+                String words=(text(n)+" "+desc(n)).toLowerCase(Locale.ROOT);
+                if(words.contains("без повтора") || words.contains("один раз"))once=true;
+            }
+            if(toggle!=null)return new Row(time,opener,toggle,once);
+        }
+        return null;
     }
     static boolean click(AccessibilityNodeInfo n){
         return n!=null && n.isEnabled() && n.performAction(AccessibilityNodeInfo.ACTION_CLICK);
     }
     static AccessibilityNodeInfo save(List<AccessibilityNodeInfo> nodes){
+        AccessibilityNodeInfo found=null;
         for(AccessibilityNodeInfo n:nodes){
+            if(!n.isClickable())continue;
             String key=id(n);
-            if(n.isClickable() && (key.matches("(?:.*_)?(?:save|done|positive|ok)(?:_button)?") ||
-                desc(n).matches("(?iu)сохранить(?: изменения)?|готово|подтвердить|ок|ok") || text(n).matches("(?iu)сохранить|готово")))return n;
+            if(key.matches("(?:.*_)?(?:save|done|positive|ok)(?:_button)?") ||
+               desc(n).matches("(?iu)сохранить(?: изменения| будильник)?|готово|подтвердить|ок|ok") ||
+               text(n).matches("(?iu)сохранить|готово")){
+                if(found!=null)return null;
+                found=n;
+            }
         }
-        return null;
+        return found;
     }
     static List<AccessibilityNodeInfo> wheels(List<AccessibilityNodeInfo> nodes){
-        ArrayList<AccessibilityNodeInfo> found=new ArrayList<>();
+        List<AccessibilityNodeInfo> found=new ArrayList<>();
         for(AccessibilityNodeInfo n:nodes){
             String cl=String.valueOf(n.getClassName()).toLowerCase(Locale.ROOT);
-            if(cl.contains("numberpicker") || cl.contains("spinner") && n.isScrollable()
-                || n.isScrollable() && (id(n).matches(".*(hour|minute).*") || cl.endsWith("picker") && !cl.contains("timepicker")))found.add(n);
+            boolean step=n.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD)
+                || n.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD);
+            if(cl.contains("numberpicker") || (step || n.getRangeInfo()!=null) &&
+                (cl.contains("spinner") || cl.endsWith("picker") && !cl.contains("timepicker") ||
+                 id(n).matches(".*(?:hour|minute).*")))found.add(n);
         }
         found.sort(Comparator.comparingInt(n->bounds(n).centerX()));
         if(found.size()!=2 || bounds(found.get(0)).right>bounds(found.get(1)).left)return Collections.emptyList();
         return found;
     }
+    private static int number(AccessibilityNodeInfo node){
+        for(String s:new String[]{text(node),desc(node)}){
+            Matcher m=NUMBER.matcher(s);
+            if(m.matches())return Integer.parseInt(m.group(1));
+        }
+        return -1;
+    }
     static int value(AccessibilityNodeInfo wheel){
         AccessibilityNodeInfo.RangeInfo range=wheel.getRangeInfo();
         if(range!=null)return Math.round(range.getCurrent());
-        for(String s:new String[]{text(wheel),desc(wheel)}){
-            java.util.regex.Matcher number=Pattern.compile("(?iu)^([0-9]{1,2})(?:\\s+(?:час(?:а|ов)?|минут(?:а|ы)?))?$").matcher(s);
-            if(number.matches())return Integer.parseInt(number.group(1));
-        }
+        int direct=number(wheel);
+        if(direct>=0)return direct;
         int best=Integer.MAX_VALUE,value=-1,center=bounds(wheel).centerY();
         for(AccessibilityNodeInfo n:tree(wheel)){
-            String s=text(n);
-            if(!s.matches("[0-9]{1,2}"))continue;
+            int v=number(n);
+            if(v<0)continue;
             int distance=Math.abs(bounds(n).centerY()-center);
-            if(distance<best){best=distance;value=Integer.parseInt(s);}
+            if(distance<best){best=distance;value=v;}
+            else if(distance==best && value!=v)value=-1;
         }
         return value;
+    }
+    static boolean move(AccessibilityNodeInfo wheel,int current,int target,int cycle){
+        if(wheel.getRangeInfo()!=null && wheel.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS)){
+            android.os.Bundle args=new android.os.Bundle();
+            args.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,target);
+            if(wheel.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.getId(),args))return true;
+        }
+        boolean forward=(target-current+cycle)%cycle<=cycle/2;
+        int action=forward?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
+        if(wheel.performAction(action))return true;
+        // Some OEM wheels expose adjacent values as buttons but do not expose a scroll action.
+        int next=(current+(forward?1:-1)+cycle)%cycle;
+        for(AccessibilityNodeInfo child:tree(wheel)){
+            if(number(child)==next && child.isClickable())return click(child);
+        }
+        return false;
     }
 }

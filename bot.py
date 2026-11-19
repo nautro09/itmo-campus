@@ -198,6 +198,11 @@ class Bot:
     async def route(self, text):
         screen = self.s.get("screen", {"name":"home"})
         name = screen["name"]
+        if text=="/start clock" and self.s.get("owner"):
+            try:
+                return wake.pair_text(self.s), self.s.get("keyboard", MAIN)
+            except ValueError as error:
+                return str(error), self.s.get("keyboard", MAIN)
         if text in (HOME, "/start"):
             return self.plan.home()
         if text == "📈 Баллы БаРС":
@@ -329,7 +334,7 @@ class Bot:
                 return str(err) if not str(err).startswith("invalid literal") else "Введи число минут.",self.s.get("keyboard",MAIN)
             mode="включён" if self.s.get("wake_on",False) else "выключен"
             details = (f"Будильник {mode}. Сборы: {self.s.get('wake_prep',40)} мин + дорога до корпуса. "
-                       f"Онлайн: за {self.s.get('wake_online',20)} мин. Правила для очных пар: "
+                       f"Без правила для онлайн-пары · за {self.s.get('wake_online',20)} мин. Время по парам · "
                        f"{self.s.get('wake_rules',wake.DEFAULTS['wake_rules']) or 'нет'}.")
             details += "\nСвободный день · " + ("предложить выключение" if self.s.get("wake_free_off",False) else "оставить как есть")
             return self.plan.screen("wake",details+"\n"+wake.status(self.s)+"\n"+notice,
@@ -561,6 +566,7 @@ async def run_bot(data, api, token):
             store.set("owner",int(configured))
     with store.db:
         store.set("telegram_status",{"ok":True,"detail":"Связь установлена при запуске."})
+        store.set("wake_bot_username", me["username"])
     runner=await start_web(bot,token)
     print(f"Бот запущен: https://t.me/{me['username']}", flush=True)
     if not store.get("owner"):

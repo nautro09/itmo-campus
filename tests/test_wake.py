@@ -14,7 +14,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from itmo import MSK
 from miniapp import application, save_settings
 from store import Store
-from wake import proposal, digest, pair_text, plan, revoke, rules
+from wake import proposal, digest, pair_text, plan, revoke, rules, status
 
 
 class WakeTests(unittest.IsolatedAsyncioTestCase):
@@ -37,14 +37,35 @@ class WakeTests(unittest.IsolatedAsyncioTestCase):
         self.s.set("campus_minutes",{"A":60})
         self.put([dict(time_start="12:10",building="A")])
         self.assertEqual(datetime.fromtimestamp(plan(self.s,self.now)[1]["at"],MSK).strftime("%H:%M"),"10:30")
-        self.put([dict(time_start="08:10",format="онлайн")])
-        self.assertEqual(datetime.fromtimestamp(plan(self.s,self.now)[1]["at"],MSK).strftime("%H:%M"),"07:50")
+        self.put([dict(time_start="10:00",format="онлайн")])
+        self.assertEqual(datetime.fromtimestamp(plan(self.s,self.now)[1]["at"],MSK).strftime("%H:%M"),"09:40")
         self.put([])
         self.assertEqual(plan(self.s,self.now)[1]["action"],"cancel")
         self.assertEqual(plan(self.s,self.now+timedelta(hours=3))[1]["action"],"keep")
         self.s.set("source_error","offline")
         self.assertEqual(plan(self.s,self.now)[1]["action"],"keep")
         with self.assertRaises(ValueError):rules("08:10=08:30")
+
+    def test_second_pair_rule_wins_for_every_format(self):
+        for fmt in ("Очно - дистанционный", "онлайн", "очно"):
+            self.put([dict(time_start="13:30", format="очно"), dict(time_start="09:50", format=fmt)])
+            row = proposal(self.s, self.now)
+            self.assertEqual((row["basis"], row["start"]), ("rule", "09:50"))
+            self.assertEqual(datetime.fromtimestamp(row["at"], MSK).strftime("%H:%M"), "08:30")
+        self.s.set("wake_rules", "09:50=07:55")
+        self.assertEqual(datetime.fromtimestamp(proposal(self.s,self.now)["at"],MSK).strftime("%H:%M"), "07:55")
+
+    def test_stale_manual_ack_is_not_shown_as_current(self):
+        self.s.set("wake_device", "paired")
+        self.s.set("wake_ack", {"revision":"old","text":"Вручную · 09:30"})
+        self.s.set("wake_device_origin", "https://old.example")
+        self.s.set("wake_origin", "https://new.example")
+        self.put([dict(time_start="09:50", format="онлайн")])
+        with patch("wake.proposal",return_value=proposal(self.s,self.now)):
+            message = status(self.s)
+        self.assertIn("08:30", message)
+        self.assertNotIn("09:30", message)
+        self.assertIn("новый QR", message)
 
     def test_native_day_off_is_opt_in(self):
         self.put([])

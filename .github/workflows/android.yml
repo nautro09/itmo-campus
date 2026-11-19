@@ -16,6 +16,10 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
       - run: TEST_APK_OUT="$PWD/android/test.apk" sh android/build.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
       - name: Sign disposable emulator build
         run: |
           keytool -genkeypair -keystore "$RUNNER_TEMP/test.p12" -storepass android -alias test -keyalg RSA -validity 2 -dname CN=CI
@@ -28,3 +32,8 @@ jobs:
           api-level: 35
           arch: x86_64
           script: sh android/smoke.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clock-preview
+          path: ${{ runner.temp }}/clock-preview.png
+          retention-days: 3

@@ -55,19 +55,20 @@ def plan(store, now=None):
         start = min(x["time_start"] for x in lessons)
         first = [x for x in lessons if x["time_start"] == start]
         begins = datetime.fromisoformat(day+"T"+start).replace(tzinfo=MSK)
-        leads = []
-        for lesson in first:
-            if not onsite(lesson):
-                leads.append(store.get("wake_online",20))
-            elif start in custom:
-                wake = datetime.fromisoformat(day+"T"+custom[start]).replace(tzinfo=MSK)
-                leads.append(int((begins-wake).total_seconds()//60))
-            else:
-                travel = store.get("campus_minutes",{}).get(lesson.get("building"),store.get("travel_minutes",35))
-                leads.append(travel+store.get("wake_prep",40))
-        at = begins-timedelta(minutes=max(leads))
+        if start in custom:
+            at = datetime.fromisoformat(day + "T" + custom[start]).replace(tzinfo=MSK)
+            basis = "rule"
+        else:
+            # Simultaneous classes can have different formats or buildings. Allow time for both.
+            campus = store.get("campus_minutes", {})
+            travel = store.get("travel_minutes", 35)
+            prep = store.get("wake_prep", 40)
+            online = store.get("wake_online", 20)
+            lead, basis = max((prep + campus.get(lesson.get("building"), travel), "travel")
+                              if onsite(lesson) else (online, "online") for lesson in first)
+            at = begins - timedelta(minutes=lead)
         if at > now:
-            row.update(action="set", at=int(at.timestamp()))
+            row.update(action="set", at=int(at.timestamp()), start=start, basis=basis)
     return days
 
 
@@ -86,16 +87,27 @@ def digest(value):
 
 
 def status(store):
-    info = store.get("wake_ack")
     if not store.get("wake_device"):
         return "Телефон не привязан."
-    if not info:
-        return "Телефон привязан. Ожидаю подтверждения будильника."
+    row = proposal(store)
+    lines = []
+    if row["action"] == "set":
+        at = datetime.fromtimestamp(row["at"], MSK).strftime("%H:%M")
+        lines.append(f"Пара в {row['start']} · подъём в {at} МСК · {row['day']}")
+    info = store.get("wake_ack") or {}
+    if info.get("revision") == digest(json.dumps(row, sort_keys=True)):
+        lines.append(info["text"])
+    else:
+        lines.append("Телефон ещё не подтвердил текущий план.")
     last = store.get("wake_last_seen")
-    status = "Последний ответ телефона · " + (datetime.fromisoformat(last).strftime("%d.%m %H:%M МСК") if last else info["time"]) + "\n" + info["text"]
-    if last and datetime.now(MSK) - datetime.fromisoformat(last) > timedelta(minutes=45):
-        status += "\nТелефон давно не выходил на связь. Проверь адрес сервера и фоновую работу APK."
-    return status
+    if last:
+        seen = datetime.fromisoformat(last)
+        lines.append("Последняя связь · " + seen.strftime("%d.%m %H:%M МСК"))
+    if store.get("wake_device_origin") and store.get("wake_device_origin") != store.get("wake_origin"):
+        lines.append("Адрес сервера изменился. Открой новый QR в этом профиле на телефоне.")
+    elif last and datetime.now(MSK) - seen > timedelta(minutes=45):
+        lines.append("Давно нет ответа. Сверь адрес сервера в APK с адресом в Telegram.")
+    return "\n".join(lines)
 
 
 def pair_ticket(store):
@@ -114,7 +126,7 @@ def pair_text(store):
 
 
 def revoke(store):
-    for key in ("wake_pair","wake_device","wake_ack","wake_last_seen"):
+    for key in ("wake_pair","wake_device","wake_ack","wake_last_seen","wake_device_origin"):
         store.set(key,None)
 
 
@@ -130,10 +142,17 @@ def register(app, store):
             if ticket.get("until",0)<time.time() or not hmac.compare_digest(ticket.get("hash",""),hashed):
                 raise web.HTTPUnauthorized()
             secret = secrets.token_urlsafe(32)
+            previous_key = store.get("wake_device")
+            origin = store.get("wake_origin")
+            result = {"token":secret}
+            if previous_key and origin:
+                proof = ("relink\n" + origin + "\n" + secret).encode()
+                result["continuity"] = hmac.digest(previous_key.encode(), proof, "sha256").hex()
             with store.db:
                 revoke(store)
                 store.set("wake_device",digest(secret))
-            return web.json_response({"token":secret})
+                store.set("wake_device_origin", store.get("wake_origin"))
+            return web.json_response(result)
         key = store.get("wake_device") or ""
         nonce = request.headers.get("X-Wake-Nonce","")
         stamp = request.headers.get("X-Wake-Time","")
@@ -157,7 +176,14 @@ def register(app, store):
             if op=="nativeplan":
                 settings = {name: store.get(name, default) for name, default in DEFAULTS.items()}
                 settings["travel_minutes"] = store.get("travel_minutes", 35)
-                return reply({"proposal":row,"revision":revision,"settings":settings})
+                entry = store.get("cache", {}).get(row["day"], {})
+                checked = entry.get("checked")
+                # Outside the revision: a new successful poll of an identical schedule
+                # refreshes its offline expiry without editing the clock a second time.
+                checked_at = int(datetime.fromisoformat(checked).timestamp()) if checked else 0
+                username = store.get("wake_bot_username", "")
+                return reply({"proposal":row, "revision":revision, "settings":settings,
+                              "checked_at":checked_at, "bot":username})
             if not hmac.compare_digest(revision,ack):
                 raise web.HTTPConflict()
             if op!="received" and row["action"] not in ("set","cancel"):

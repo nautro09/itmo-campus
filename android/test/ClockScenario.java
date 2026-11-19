@@ -10,6 +10,7 @@ import java.util.Locale;
 final class ClockScenario {
     final Activity activity;
     boolean enabled;
+    boolean secondEnabled=true;
     String time="09:50";
     LinearLayout page;
     ClockScenario(Activity activity){this.activity=activity;}
@@ -24,10 +25,14 @@ final class ClockScenario {
         page();
         label("Сон | Подъем");label("Другие будильники");
         LinearLayout row=new LinearLayout(activity);row.setImportantForAccessibility(android.view.View.IMPORTANT_FOR_ACCESSIBILITY_YES);page.addView(row);
-        Button edit=new Button(activity);edit.setText(time);row.addView(edit);
+        Button edit=new Button(activity);edit.setContentDescription(time+", Будильник, Без повтора");edit.setText(time);row.addView(edit);
         edit.setOnClickListener(v->edit());
         Switch toggle=new Switch(activity);toggle.setChecked(enabled);row.addView(toggle);
         toggle.setOnCheckedChangeListener((v,on)->enabled=on);
+        LinearLayout second=new LinearLayout(activity);second.setImportantForAccessibility(android.view.View.IMPORTANT_FOR_ACCESSIBILITY_YES);page.addView(second);
+        Button later=new Button(activity);later.setText("12:15");second.addView(later);
+        Switch other=new Switch(activity);other.setChecked(secondEnabled);second.addView(other);
+        other.setOnCheckedChangeListener((v,on)->secondEnabled=on);
     }
     NumberPicker picker(LinearLayout row,int max,int value){
         NumberPicker n=new NumberPicker(activity);n.setMinValue(0);n.setMaxValue(max);n.setValue(value);
@@ -41,15 +46,15 @@ final class ClockScenario {
         Button save=new Button(activity);save.setText("Готово");page.addView(save);
         save.setOnClickListener(v->{time=String.format(Locale.ROOT,"%02d:%02d",h.getValue(),m.getValue());list();});
     }
-    static void check(Instrumentation test, Activity a)throws Exception{
+    static void check(Instrumentation test, Activity a,String target)throws Exception{
         ClockScenario fixture=new ClockScenario(a);
         test.runOnMainSync(fixture::list);
         UiAutomation access=test.getUiAutomation();
         for(boolean on:new boolean[]{true,false}){
-            ClockEditor editor=new ClockEditor(on,"08:48");
+            ClockEditor editor=new ClockEditor(on,target);
             String observed="no window";
-            for(int attempt=0;attempt<32 && !editor.verified;attempt++){
-                Thread.sleep(600);
+            for(int attempt=0;attempt<75 && !editor.verified;attempt++){
+                Thread.sleep(480);
                 AccessibilityNodeInfo root=access.getRootInActiveWindow();
                 if(root!=null){
                     List<AccessibilityNodeInfo> nodes=ClockUi.tree(root);
@@ -61,7 +66,7 @@ final class ClockScenario {
                 }
                 if(editor.failure!=null)throw new AssertionError(editor.failure+" | "+observed);
             }
-            if(!editor.verified || fixture.enabled!=on || !"08:48".equals(fixture.time))
+            if(!editor.verified || fixture.enabled!=on || !target.equals(fixture.time) || !fixture.secondEnabled)
                 throw new AssertionError("Clock editor verification: "+fixture.time+" "+fixture.enabled+" | "+observed);
         }
     }

@@ -1,7 +1,7 @@
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagReportViewIds"
+    android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"
-    android:packageNames="com.hihonor.deskclock,com.honor.deskclock,com.android.deskclock"
+    android:packageNames="com.hihonor.deskclock,com.honor.deskclock,com.huawei.deskclock,com.android.deskclock"
     android:notificationTimeout="150" android:description="@string/clock_access_description"/>

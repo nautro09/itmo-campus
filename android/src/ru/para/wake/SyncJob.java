@@ -17,9 +17,10 @@ public class SyncJob extends JobService {
     }
     public boolean onStartJob(JobParameters params){
         Link.worker.execute(()->{
-            try{Link.sync(this);Main.result(this,"Синхронизация выполнена");}
-            catch(Exception e){Main.result(this,"Ошибка синхронизации. Проверь сеть и адрес сервера.");}
-            jobFinished(params,false);
+            boolean retry=false;
+            try{Link.syncIfDue(this);}
+            catch(Exception e){retry=!Link.prefs(this).getBoolean("syncBlocked",false);}
+            jobFinished(params,retry);
         });
         return true;
     }

@@ -258,7 +258,7 @@
   function ruleEditor(){
     const entries=(state.settings.wake_rules??"08:10=06:20, 09:50=08:30").split(",").filter(v=>v.trim());
     modal("Время по парам",`<form class="form" data-form="wake-rules"><div class="rule-list">${entries.map((v,i)=>ruleRow(...v.trim().split("="),i)).join("")}</div>
-    ${btn("add-rule","Добавить пару","plus","minor")}<p class="meta">Если правила для начала занятия нет, учитываются сборы и дорога.</p><button class="btn primary">Сохранить</button></form>`);
+    ${btn("add-rule","Добавить пару","plus","minor")}<p class="meta">Правило действует для любого формата пары. Для остальных занятий учитываются дорога и сборы или время до онлайн-пары.</p><button class="btn primary">Сохранить</button></form>`);
   }
   function profile(){
     const s=state.settings,person=state.profile||{},services=state.services;
