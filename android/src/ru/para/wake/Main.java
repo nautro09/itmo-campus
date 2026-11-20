@@ -141,8 +141,7 @@ public class Main extends Activity {
         if(!applied && !automatic && !rev.isEmpty() && rev.equals(prefs.getString("confirmed","")))
             ui.line(clock,"Время отмечено тобой вручную",14,MUTED,false,6);
         if(!automatic || !ClockAccess.ready())ui.action(clock,"Разрешить автоизменение",true,this::enableClock);
-        else if(!applied && rev.equals(prefs.getString("blockedRev","!")))
-            ui.action(clock,"Повторить проверку",true,this::retry);
+        else if(NativeClock.actionable(row))retryButton(clock,!applied);
         ui.action(clock,"Открыть штатные Часы",false,this::openClock);
         if(!automatic && NativeClock.actionable(row) && rev.equals(prefs.getString("opened","")) && !rev.equals(prefs.getString("confirmed","")))
             ui.action(clock,"Я проверил время в Часах",false,()->perform(()->{
@@ -193,7 +192,7 @@ public class Main extends Activity {
             boolean auto=prefs.getBoolean("autoClock",false);
             ui.line(box,auto&&ClockAccess.ready()?"Служба включена":"Служба выключена",15,MUTED,false,8);
             if(auto && ClockAccess.ready()){
-                ui.action(box,"Повторить проверку",false,this::retry);
+                retryButton(box,false);
                 ui.action(box,"Выключить автоизменение",false,()->{
                     prefs.edit().putBoolean("autoClock",false).remove("autoStatus").apply();ClockAccess.stopLocal();draw(true);
                 });
@@ -252,10 +251,13 @@ public class Main extends Activity {
                 catch(ActivityNotFoundException e){operationIssue="Открой настройки Android → Специальные возможности → Пара.";draw(true);}
             }).show();
     }
-    private void retry(){
-        prefs.edit().remove("blockedRev").remove("retryAfter").remove("attempts").remove("autoApplied")
-            .remove("autoReported").remove("autoStatus").apply();
-        perform(()->Link.sync(this));
+    private void retryButton(LinearLayout box,boolean primary){
+        Button retry=ui.action(box,"Повторить проверку",primary,()->{
+            if(busy)return;
+            ClockAccess.restartCheck(this);
+            perform(()->Link.sync(this));
+        });
+        retry.setEnabled(!busy);retry.setAlpha(busy?0.65f:1f);
     }
     private void openClock(){
         try{

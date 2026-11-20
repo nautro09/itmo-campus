@@ -9,6 +9,8 @@ import java.util.regex.Pattern;
 final class ClockUi {
     private static final Pattern TIME = Pattern.compile("(?<![0-9])([01]?[0-9]|2[0-3]):([0-5][0-9])(?![0-9])");
     private static final Pattern NUMBER = Pattern.compile("(?iu)^([0-9]{1,2})(?:\\s*(?:ч|час(?:а|ов)?|мин(?:ут(?:а|ы)?)?)\\.?)?$");
+    private static final Pattern SAVE_ID = Pattern.compile("(?:.*_)?(?:save|done|positive|ok|confirm)(?:_(?:button|btn|image|icon|view))?");
+    private static final Pattern SAVE_LABEL = Pattern.compile("(?iu)(?:сохранить(?: изменения| будильник)?|готово|подтвердить|ок|ok|save|done)(?:,?\\s+кнопка)?");
 
     static List<AccessibilityNodeInfo> tree(AccessibilityNodeInfo root){
         List<AccessibilityNodeInfo> nodes=new ArrayList<>();
@@ -74,43 +76,74 @@ final class ClockUi {
     }
     private static Row identify(AccessibilityNodeInfo timeNode,String time,int top){
         AccessibilityNodeInfo opener=null;
-        Row switchOnly=null;
+        Row candidate=null;
         for(AccessibilityNodeInfo parent=timeNode;parent!=null && bounds(parent).top>=top;parent=parent.getParent()){
             if(opener==null && parent.isClickable() && !parent.isCheckable())opener=parent;
             AccessibilityNodeInfo toggle=null;
             boolean once=false;
             for(AccessibilityNodeInfo n:tree(parent)){
                 if(n.isCheckable()){
-                    if(toggle!=null)return switchOnly;
+                    if(toggle!=null)return candidate;
                     toggle=n;
                 }
                 String other=rowTime(n);
-                if(!other.isEmpty() && !other.equals(time))return switchOnly;
+                if(!other.isEmpty() && !other.equals(time))return candidate;
                 String words=(text(n)+" "+desc(n)).toLowerCase(Locale.ROOT);
                 if(words.contains("без повтора") || words.contains("один раз"))once=true;
             }
             if(toggle!=null){
-                Row candidate=new Row(time,opener,toggle,once);
-                if(opener!=null)return candidate;
-                switchOnly=candidate;
+                candidate=new Row(time,opener,toggle,once);
+                // The one-shot subtitle may sit below the horizontal time/switch group.
+                if(opener!=null && once)return candidate;
             }
         }
-        return switchOnly;
+        return candidate;
     }
     static boolean click(AccessibilityNodeInfo n){
         return n!=null && n.isEnabled() && n.performAction(AccessibilityNodeInfo.ACTION_CLICK);
     }
+    static boolean toggle(Row row){
+        if(!row.toggle.isEnabled())return false;
+        if(click(row.toggle))return true;
+        // Some stock rows expose the Switch state on a child and the action on its wrapper.
+        AccessibilityNodeInfo parent=row.toggle.getParent();
+        for(int depth=0;parent!=null && depth<2;depth++,parent=parent.getParent()){
+            if(parent.equals(row.open))return false;
+            for(AccessibilityNodeInfo n:tree(parent)){
+                if(n.equals(parent) || n.equals(row.toggle))continue;
+                if(n.isClickable() || n.isCheckable() || !text(n).isEmpty() || !desc(n).isEmpty())return false;
+            }
+            if(!rowTime(parent).isEmpty())return false;
+            if(parent.isClickable())return click(parent);
+        }
+        return false;
+    }
+    private static boolean saveLabel(AccessibilityNodeInfo n){
+        return SAVE_ID.matcher(id(n)).matches() || SAVE_LABEL.matcher(text(n)).matches() || SAVE_LABEL.matcher(desc(n)).matches();
+    }
+    private static AccessibilityNodeInfo saveAction(AccessibilityNodeInfo label){
+        AccessibilityNodeInfo action=label;
+        for(int depth=0;action!=null && depth<=2;depth++,action=action.getParent()){
+            if(!action.isClickable())continue;
+            if(!action.isEnabled())return null;
+            // A toolbar containing both the cross and the checkmark is never itself a Save button.
+            for(AccessibilityNodeInfo n:tree(action)){
+                if(n.equals(action) || saveLabel(n))continue;
+                if(n.isClickable() || n.isCheckable() || !text(n).isEmpty() || !desc(n).isEmpty())return null;
+            }
+            if(!action.equals(label) && (!text(action).isEmpty() || !desc(action).isEmpty()) && !saveLabel(action))return null;
+            return action;
+        }
+        return null;
+    }
     static AccessibilityNodeInfo save(List<AccessibilityNodeInfo> nodes){
         AccessibilityNodeInfo found=null;
         for(AccessibilityNodeInfo n:nodes){
-            if(!n.isClickable())continue;
-            String key=id(n);
-            if(key.matches("(?:.*_)?(?:save|done|positive|ok)(?:_button)?") ||
-               desc(n).matches("(?iu)сохранить(?: изменения| будильник)?|готово|подтвердить|ок|ok") ||
-               text(n).matches("(?iu)сохранить|готово")){
-                if(found!=null)return null;
-                found=n;
-            }
+            if(!saveLabel(n))continue;
+            AccessibilityNodeInfo action=saveAction(n);
+            if(action==null)continue;
+            if(found!=null && !found.equals(action))return null;
+            found=action;
         }
         return found;
     }
@@ -131,12 +164,14 @@ final class ClockUi {
     // Support reports contain roles and static resource IDs only, never labels or screen contents.
     static String describe(List<AccessibilityNodeInfo> nodes){
         int switches=0,scroll=0;
+        boolean editing=label(nodes,"Изменить будильник")!=null;
         Set<String> widgets=new LinkedHashSet<>();
         for(AccessibilityNodeInfo n:nodes){
             if(n.isCheckable())switches++;
             if(n.isScrollable())scroll++;
-            if(widgets.size()>=6 || !(n.isScrollable() || n.isCheckable() || n.getRangeInfo()!=null))continue;
             String type=String.valueOf(n.getClassName());
+            boolean editorControl=editing && (saveLabel(n) || type.endsWith("ImageButton") || type.toLowerCase(Locale.ROOT).contains("picker"));
+            if(widgets.size()>=10 || !(n.isScrollable() || n.isCheckable() || n.getRangeInfo()!=null || editorControl))continue;
             String resource=id(n);
             widgets.add(type.substring(type.lastIndexOf('.')+1)+(resource.isEmpty()?"":" / "+resource));
         }
@@ -165,20 +200,20 @@ final class ClockUi {
         }
         return value;
     }
-    static boolean move(AccessibilityNodeInfo wheel,int current,int target,int cycle){
-        if(wheel.getRangeInfo()!=null && wheel.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS)){
+    static boolean move(AccessibilityNodeInfo wheel,int current,int target,int cycle,boolean stalled){
+        if(!stalled && wheel.getRangeInfo()!=null && wheel.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS)){
             android.os.Bundle args=new android.os.Bundle();
             args.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,target);
             if(wheel.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.getId(),args))return true;
         }
         boolean forward=(target-current+cycle)%cycle<=cycle/2;
         int action=forward?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
-        if(wheel.performAction(action))return true;
+        if(!stalled && wheel.performAction(action))return true;
         // Some OEM wheels expose adjacent values as buttons but do not expose a scroll action.
         int next=(current+(forward?1:-1)+cycle)%cycle;
         for(AccessibilityNodeInfo child:tree(wheel)){
             if(number(child)==next && child.isClickable())return click(child);
         }
-        return false;
+        return stalled && wheel.performAction(action);
     }
 }
