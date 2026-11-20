@@ -16,8 +16,10 @@ final class ClockEditor {
     private String original;
     private final boolean saving;
     private Stage stage=Stage.LIST;
-    private int previous=-1,stalled;
-    private long waitingSince;
+    private int previous=-1;
+    private long waitingSince,movedAt;
+    private boolean retried;
+    int actions;
     String failure,deferTime;
     String trace="Ожидаю список будильников";
     boolean verified;
@@ -47,6 +49,9 @@ final class ClockEditor {
         return match;
     }
     private void list(List<AccessibilityNodeInfo> nodes){
+        if(ClockUi.editing(nodes)){
+            awaiting("Ожидаю возврата из редактора к списку будильников");return;
+        }
         List<ClockUi.Row> rows=ClockUi.rows(nodes);
         if(rows.isEmpty()){
             if(stage==Stage.VERIFY){awaiting("После сохранения ожидаю список будильников");return;}
@@ -76,6 +81,7 @@ final class ClockEditor {
                 if(enable && !target.equals(original)){
                     if(!journal.write(original,false)){failure="План изменился до открытия первой строки";return;}
                     if(!ClockUi.click(row.open)){failure="Часы не дали открыть первую строку";return;}
+                    actions++;
                     stage=Stage.EDIT;trace="Строка открыта · ожидаю редактор";return;
                 }
             }
@@ -88,6 +94,7 @@ final class ClockEditor {
         }
         if(!journal.write(original,true)){failure="План изменился до переключения";return;}
         if(!ClockUi.toggle(row)){failure="Переключатель будильника недоступен";return;}
+        actions++;
         stage=Stage.SWITCH;trace="Проверяю положение переключателя";
     }
     private void edit(List<AccessibilityNodeInfo> nodes){
@@ -97,9 +104,9 @@ final class ClockEditor {
         }
         List<AccessibilityNodeInfo> wheels=ClockUi.wheels(nodes);
         if(wheels.size()!=2){awaiting("Редактор открыт · Часы не показали два колеса времени");return;}
-        int h=ClockUi.value(wheels.get(0)),m=ClockUi.value(wheels.get(1));
-        if(h<0 || h>23 || m<0 || m>59){awaiting("Часы не сообщили выбранное время");return;}
-        int current=h*60+m;
+        int current=ClockUi.timeInEditor(nodes,wheels);
+        if(current<0){awaiting("Часы не сообщили выбранное время");return;}
+        int h=current/60,m=current%60;
         if(previous==-1 && !original.equals(String.format(Locale.ROOT,"%02d:%02d",h,m))){
             awaiting("В редакторе оказалось другое исходное время");return;
         }
@@ -108,18 +115,19 @@ final class ClockEditor {
             AccessibilityNodeInfo save=ClockUi.save(nodes);
             if(save==null){awaiting("Время выбрано · ищу кнопку сохранения в Часах");return;}
             if(!journal.write(original,true) || !ClockUi.click(save)){failure="Не удалось сохранить время";return;}
+            actions++;
             stage=Stage.VERIFY;trace="Время выбрано · проверяю сохранение";return;
         }
         boolean hours=h!=hour;
-        trace=hours?"Меняю часы":"Меняю минуты";
+        trace=String.format(Locale.ROOT,"В редакторе %02d:%02d · выставляю %s",h,m,target);
         boolean unchanged=previous==current;
+        long now=SystemClock.elapsedRealtime();
         if(unchanged){
-            // Give an animated scroll time to settle. Try an exposed adjacent value once.
-            stalled++;
-            if(stalled>=8){failure="Колесо не отреагировало на изменение";return;}
-            if(stalled!=3)return;
-        }else{previous=current;stalled=0;}
-        if(!ClockUi.move(wheels.get(hours?0:1),hours?h:m,hours?hour:minute,hours?24:60,unchanged))
-            failure="Часы не разрешили изменить значение колеса";
+            if(now-movedAt>=4000){failure="Колесо не отреагировало на изменение";return;}
+            if(retried || now-movedAt<1000)return;
+            retried=true;
+        }else{previous=current;movedAt=now;retried=false;}
+        if(ClockUi.move(wheels.get(hours?0:1),hours?h:m,hours?hour:minute,hours?24:60,unchanged))actions++;
+        else failure="Часы не разрешили изменить значение колеса";
     }
 }

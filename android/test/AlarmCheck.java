@@ -37,7 +37,7 @@ public class AlarmCheck extends Instrumentation {
             if(ClockUi.label(ClockUi.tree(getUiAutomation().getRootInActiveWindow()),"08:30")==null)
                 throw new AssertionError("current time missing from dashboard");
             ClockScenario.check(this,sample,NativeClock.time(NativeClock.current(c)));
-            runOnMainSync(sample::finish);
+            BackgroundClockScenario.run(this,c,sample);
             waitForIdleSync();
             PlanScenario.changes(c);
             Link.prefs(c).edit().clear().commit();

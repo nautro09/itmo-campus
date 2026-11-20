@@ -272,6 +272,8 @@ public class Main extends Activity {
     }
     private void diagnostics(){
         StringBuilder text=new StringBuilder(Build.MANUFACTURER+" "+Build.MODEL+" · Android "+Build.VERSION.RELEASE);
+        try{text.append("\nПара ").append(getPackageManager().getPackageInfo(getPackageName(),0).versionName);}
+        catch(android.content.pm.PackageManager.NameNotFoundException ignored){}
         Intent clock=ClockAccess.systemClock(this);
         if(clock!=null){
             try{text.append("\nЧасы ").append(getPackageManager().getPackageInfo(clock.getPackage(),0).versionName).append(" · ").append(clock.getPackage());}

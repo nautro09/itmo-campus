@@ -34,7 +34,7 @@ public final class ClockAccess extends AccessibilityService {
     private String revision="",pkg="",target="";
     private boolean enable,networkRegistered,unlockRegistered,synchronizing;
     private ClockEditor editor;
-    private long deadline,startLimit;
+    private long deadline,startLimit,nextStep;
     private boolean sawClock;
     private String controls="";
     private SharedPreferences prefs(){return Link.prefs(this);}
@@ -68,6 +68,10 @@ public final class ClockAccess extends AccessibilityService {
     }
     @Override public void onServiceConnected(){
         connected=this;
+        if(prefs().contains("clockInProgress")){
+            prefs().edit().remove("clockInProgress").remove("retryAfter").apply();
+            status("Продолжаю прерванную проверку будильника");
+        }
         if(!unlockRegistered){
             IntentFilter filter=new IntentFilter(Intent.ACTION_USER_PRESENT);
             if(Build.VERSION.SDK_INT>=33)registerReceiver(unlock,filter,Context.RECEIVER_NOT_EXPORTED);
@@ -96,14 +100,28 @@ public final class ClockAccess extends AccessibilityService {
         });
     }
     @Override public void onDestroy(){
+        if(editor!=null){
+            status("Служба Часов остановлена Android · продолжу после подключения");
+            prefs().edit().remove("retryAfter").apply();
+        }
         if(connected==this)connected=null;
         if(unlockRegistered)unregisterReceiver(unlock);
         if(networkRegistered)getSystemService(ConnectivityManager.class).unregisterNetworkCallback(network);
         handler.removeCallbacksAndMessages(null);
         super.onDestroy();
     }
-    public void onInterrupt(){reset();}
-    private void reset(){handler.removeCallbacks(tick);revision="";editor=null;}
+    // Android interrupts spoken/haptic feedback on focus changes. This service produces neither.
+    // Disconnect, screen lock, revocation and a lost foreground window are handled separately.
+    @Override public void onInterrupt(){}
+    private void reset(){
+        handler.removeCallbacks(tick);revision="";editor=null;nextStep=0;
+        prefs().edit().remove("clockInProgress").apply();
+    }
+    private void scheduleStep(long delay){
+        long due=SystemClock.uptimeMillis()+delay;
+        if(nextStep!=0 && nextStep<=due && handler.hasCallbacks(tick))return;
+        handler.removeCallbacks(tick);nextStep=due;handler.postAtTime(tick,due);
+    }
     private boolean unlocked(){
         return getSystemService(PowerManager.class).isInteractive() && !getSystemService(KeyguardManager.class).isKeyguardLocked();
     }
@@ -134,6 +152,21 @@ public final class ClockAccess extends AccessibilityService {
         }
         return only;
     }
+    static AccessibilityNodeInfo foreground(String pkg,AccessibilityNodeInfo active,List<AccessibilityWindowInfo> windows){
+        // A focused dialog may cover an alarm list that Android still calls the active window.
+        for(AccessibilityWindowInfo window:windows){
+            if(!window.isFocused())continue;
+            if(window.getType()!=AccessibilityWindowInfo.TYPE_APPLICATION)return null;
+            if(active!=null && window.getId()==active.getWindowId())return active;
+            AccessibilityNodeInfo focused=window.getRoot();
+            if(focused!=null)return focused;
+            return active!=null && pkg.equals(String.valueOf(active.getPackageName()))?null:active;
+        }
+        return active;
+    }
+    private AccessibilityNodeInfo foreground(String clockPackage){
+        return foreground(clockPackage,getRootInActiveWindow(),getWindows());
+    }
     private void status(String text){
         if(!text.equals(prefs().getString("autoStatus","")))prefs().edit().putString("autoStatus",text).apply();
     }
@@ -145,7 +178,7 @@ public final class ClockAccess extends AccessibilityService {
         if(connected!=this || !prefs().getBoolean("autoClock",false) || !prefs().contains("cipher"))return;
         String rev=prefs().getString("revision","");
         if(!revision.isEmpty()){
-            if(revision.equals(rev))return;
+            if(revision.equals(rev)){scheduleStep(180);return;}
             reset();
         }
         discardLegacySelection(prefs(),rev);
@@ -184,16 +217,18 @@ public final class ClockAccess extends AccessibilityService {
                 && (!saving || prefs().edit().putString("originalTime",original).putBoolean("savePending",true).commit()),
             time->NativeClock.ringsOnPlanDay(time,row.optString("day"),Instant.now(),ZoneId.systemDefault()));
         int attempts=prefs().getInt("attempts",0)+1;
-        prefs().edit().putInt("attempts",attempts).putLong("retryAfter",now.toEpochMilli()+5*NativeClock.MINUTE).apply();
+        prefs().edit().putInt("attempts",attempts).putLong("retryAfter",now.toEpochMilli()+5*NativeClock.MINUTE)
+            .putString("clockInProgress",rev).putString("clockTrace","Ожидаю первое окно штатных Часов").apply();
+        if(Build.VERSION.SDK_INT>=33)clearCache();
         deadline=SystemClock.elapsedRealtime()+65_000;startLimit=SystemClock.elapsedRealtime()+12_000;
         sawClock=false;controls="";
         try{
-            AccessibilityNodeInfo active=getRootInActiveWindow();
+            AccessibilityNodeInfo active=foreground(pkg);
             boolean onList=false;
             if(active!=null && pkg.contentEquals(String.valueOf(active.getPackageName()))){
                 List<AccessibilityNodeInfo> visible=ClockUi.tree(active);
                 onList=ClockUi.label(visible,"Другие будильники")!=null;
-                if(!onList && (ClockUi.label(visible,"Изменить будильник")!=null || ClockUi.label(visible,"Добавить будильник")!=null)){
+                if(ClockUi.editing(visible) || ClockUi.label(visible,"Добавить будильник")!=null){
                     waitForList();return;
                 }
             }
@@ -201,7 +236,7 @@ public final class ClockAccess extends AccessibilityService {
         }
         catch(RuntimeException e){fail("Android не открыл штатные Часы",true);return;}
         status("Открываю штатные Часы");
-        handler.postDelayed(tick,450);
+        scheduleStep(160);
     }
     private void waitForList(){
         prefs().edit().putString("awaitClock",revision).remove("retryAfter").apply();
@@ -233,8 +268,10 @@ public final class ClockAccess extends AccessibilityService {
         });
     }
     public void onAccessibilityEvent(AccessibilityEvent event){
-        if(!revision.isEmpty() || !prefs().contains("awaitClock") || !prefs().getBoolean("autoClock",false)
-            || !PACKAGES.contains(String.valueOf(event.getPackageName())) || handler.hasCallbacks(checkList))return;
+        if(editor!=null && event.getEventType()==AccessibilityEvent.TYPE_WINDOWS_CHANGED){scheduleStep(160);return;}
+        if(!PACKAGES.contains(String.valueOf(event.getPackageName())))return;
+        if(editor!=null && pkg.contentEquals(event.getPackageName())){scheduleStep(160);return;}
+        if(!prefs().contains("awaitClock") || !prefs().getBoolean("autoClock",false) || handler.hasCallbacks(checkList))return;
         handler.postDelayed(checkList,200);
     }
     private void resumeFromList(){
@@ -242,17 +279,24 @@ public final class ClockAccess extends AccessibilityService {
         if(connected!=this || !revision.isEmpty() || rev.isEmpty() || !rev.equals(prefs().getString("revision","")))return;
         Intent expected;
         try{expected=systemClock(this);}catch(SecurityException denied){return;}
-        AccessibilityNodeInfo active=getRootInActiveWindow();
+        AccessibilityNodeInfo active=expected==null?null:foreground(expected.getPackage());
         if(expected==null || active==null || !expected.getPackage().equals(String.valueOf(active.getPackageName())))return;
-        try{if(ClockUi.label(ClockUi.tree(active),"Другие будильники")==null)return;}
+        try{
+            List<AccessibilityNodeInfo> nodes=ClockUi.tree(active);
+            if(ClockUi.editing(nodes) || ClockUi.label(nodes,"Другие будильники")==null)return;
+        }
         catch(RuntimeException transitioning){return;}
         prefs().edit().remove("awaitClock").remove("retryAfter").remove("blockedRev").apply();
         handler.post(check);
     }
     private void step(){
+        nextStep=0;
         if(revision.isEmpty())return;
-        if(!prefs().getBoolean("autoClock",false) || !revision.equals(prefs().getString("revision","")) ||
-            !NativeClock.usable(prefs(),NativeClock.current(this),Instant.now())){reset();begin();return;}
+        if(!prefs().getBoolean("autoClock",false) || !revision.equals(prefs().getString("revision",""))){reset();begin();return;}
+        if(!NativeClock.usable(prefs(),NativeClock.current(this),Instant.now())){
+            prefs().edit().remove("retryAfter").apply();
+            status("Проверка приостановлена до получения актуального плана");reset();return;
+        }
         if(!unlocked()){
             prefs().edit().remove("retryAfter").apply();
             status("Экран заблокирован · продолжу при разблокировке");reset();return;
@@ -260,16 +304,21 @@ public final class ClockAccess extends AccessibilityService {
         if(!sawClock && SystemClock.elapsedRealtime()>startLimit){fail("Android не открыл Часы в фоне",true);return;}
         if(SystemClock.elapsedRealtime()>deadline){fail(editor.trace+" · превышено время ожидания",true);return;}
         try{
-            AccessibilityNodeInfo root=getRootInActiveWindow();
+            AccessibilityNodeInfo root=foreground(pkg);
             if(root!=null && pkg.contentEquals(String.valueOf(root.getPackageName()))){
                 List<AccessibilityNodeInfo> nodes=ClockUi.tree(root);
-                if(!editor.started() && ClockUi.label(nodes,"Другие будильники")==null &&
-                    (ClockUi.label(nodes,"Изменить будильник")!=null || ClockUi.label(nodes,"Добавить будильник")!=null)){
+                if(!editor.started() && (ClockUi.editing(nodes) || ClockUi.label(nodes,"Добавить будильник")!=null)){
                     waitForList();return;
                 }
                 String phase=editor.trace;
+                int actions=editor.actions;
                 editor.advance(nodes);
-                if(!sawClock || !phase.equals(editor.trace) || editor.failure!=null)controls=ClockUi.describe(nodes);
+                if(Build.VERSION.SDK_INT>=33 && actions!=editor.actions)clearCache();
+                if(!sawClock || !phase.equals(editor.trace) || editor.failure!=null){
+                    controls=ClockUi.describe(nodes);
+                    prefs().edit().putString("clockTrace",editor.trace+"\n"+controls).apply();
+                    status(editor.trace);
+                }
                 sawClock=true;
                 if(editor.verified)success();
                 else if(editor.failure!=null)fail(editor.failure,false);
@@ -283,7 +332,8 @@ public final class ClockAccess extends AccessibilityService {
                     reset();later(retry-System.currentTimeMillis());
                 }
             }else if(editor.started() && root!=null){fail("Экран Часов закрыт",true);return;}
+            else if(root==null && sawClock){status("Часы сменили окно · ожидаю содержимое открытого редактора");}
         }catch(RuntimeException e){fail("Не удалось прочитать элементы Часов",true);}
-        if(!revision.isEmpty())handler.postDelayed(tick,500);
+        if(!revision.isEmpty())scheduleStep(420);
     }
 }

@@ -1,14 +1,19 @@
 package ru.para.wake;
 
 import android.graphics.Rect;
+import android.os.Build;
+import android.os.Bundle;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 final class ClockUi {
     private static final Pattern TIME = Pattern.compile("(?<![0-9])([01]?[0-9]|2[0-3]):([0-5][0-9])(?![0-9])");
-    private static final Pattern NUMBER = Pattern.compile("(?iu)^([0-9]{1,2})(?:\\s*(?:ч|час(?:а|ов)?|мин(?:ут(?:а|ы)?)?)\\.?)?$");
+    private static final String UNIT="(?:ч|час(?:а|ы|ов)?|мин(?:ут(?:а|ы)?)?|hours?|minutes?)\\.?";
+    private static final Pattern NUMBER=Pattern.compile("(?iu)^(?:(?:"+UNIT+"|выбрано)\\s*[:,]?\\s*)?([0-9]{1,2})(?:\\s*"+UNIT+")?(?:,\\s*выбрано)?$");
+    private static final Pattern SPOKEN_TIME=Pattern.compile("(?iu)^(?:время\\s*[:,]?\\s*)?([01]?[0-9]|2[0-3])(?:\\s*:\\s*|\\s+час(?:а|ов)?[, ]+)([0-5]?[0-9])(?:\\s+мин(?:ут(?:а|ы)?)?\\.?)?$");
     private static final Pattern SAVE_ID = Pattern.compile("(?:.*_)?(?:save|done|positive|ok|confirm)(?:_(?:button|btn|image|icon|view))?");
     private static final Pattern SAVE_LABEL = Pattern.compile("(?iu)(?:сохранить(?: изменения| будильник)?|готово|подтвердить|ок|ok|save|done)(?:,?\\s+кнопка)?");
 
@@ -27,6 +32,7 @@ final class ClockUi {
     }
     static String text(AccessibilityNodeInfo n){return clean(n.getText());}
     static String desc(AccessibilityNodeInfo n){return clean(n.getContentDescription());}
+    private static String state(AccessibilityNodeInfo n){return Build.VERSION.SDK_INT>=30?clean(n.getStateDescription()):"";}
     static String clean(CharSequence value){
         return value==null?"":value.toString().replace('\u00a0',' ').replace('\u202f',' ').replace("\u200e","").replace("\u200f","").trim();
     }
@@ -36,10 +42,12 @@ final class ClockUi {
     }
     static AccessibilityNodeInfo label(List<AccessibilityNodeInfo> nodes,String name){
         for(AccessibilityNodeInfo n:nodes)if(text(n).equalsIgnoreCase(name)||desc(n).equalsIgnoreCase(name))return n;
+        for(AccessibilityNodeInfo n:nodes)if(clean(n.getPaneTitle()).equalsIgnoreCase(name))return n;
         return null;
     }
+    static boolean editing(List<AccessibilityNodeInfo> nodes){return label(nodes,"Изменить будильник")!=null;}
     private static String rowTime(AccessibilityNodeInfo node){
-        for(String value:new String[]{text(node),desc(node)}){
+        for(String value:new String[]{text(node),desc(node),state(node)}){
             Matcher clock=TIME.matcher(value);
             if(!clock.find())continue;
             String hour=clock.group(1);
@@ -149,28 +157,34 @@ final class ClockUi {
     }
     static List<AccessibilityNodeInfo> wheels(List<AccessibilityNodeInfo> nodes){
         List<AccessibilityNodeInfo> found=new ArrayList<>();
+        AccessibilityNodeInfo title=label(nodes,"Изменить будильник"),repeat=label(nodes,"Один раз");
+        if(repeat==null)repeat=label(nodes,"Без повтора");
+        if(title==null || repeat==null)return found;
+        Rect titleBox=bounds(title);
+        int top=titleBox.contains(bounds(repeat))?titleBox.top:titleBox.bottom,bottom=bounds(repeat).top;
+        int width=bounds(nodes.get(0)).width();
         for(AccessibilityNodeInfo n:nodes){
+            Rect box=bounds(n);
+            if(box.isEmpty() || box.centerY()<top || box.centerY()>=bottom)continue;
             String cl=String.valueOf(n.getClassName()).toLowerCase(Locale.ROOT);
-            boolean step=n.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD)
-                || n.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD);
-            if(cl.contains("numberpicker") || (step || n.getRangeInfo()!=null) &&
-                (cl.contains("spinner") || cl.endsWith("picker") && !cl.contains("timepicker") ||
-                 id(n).matches(".*(?:hour|minute).*")))found.add(n);
-        }
-        // Some vendor controls announce their numeric range, with no NumberPicker class or ID.
-        if(found.size()<2){
-            AccessibilityNodeInfo title=label(nodes,"Изменить будильник"),repeat=label(nodes,"Один раз");
-            if(repeat==null)repeat=label(nodes,"Без повтора");
-            if(title!=null && repeat!=null){
-                int top=bounds(title).bottom,bottom=bounds(repeat).top;
-                for(AccessibilityNodeInfo n:nodes){
-                    AccessibilityNodeInfo.RangeInfo range=n.getRangeInfo();
-                    if(range==null || range.getMin()!=0 || range.getMax()!=23 && range.getMax()!=59 || found.contains(n))continue;
-                    Rect frame=bounds(n);
-                    if(frame.top>=top && frame.bottom<=bottom && n.getActionList().contains(
-                        AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS))found.add(n);
-                }
+            String resource=id(n);
+            boolean named=cl.contains("numberpicker") || cl.endsWith("spinner") || resource.contains("hour") || resource.contains("minute");
+            AccessibilityNodeInfo.RangeInfo range=n.getRangeInfo();
+            boolean ranged=range!=null && range.getMin()==0 && (range.getMax()==23 || range.getMax()==59);
+            if(!named && !ranged && !(canStep(n) || n.isEditable()))continue;
+            // An enclosing TimePicker or ScrollView can span both columns.
+            if((long)box.width()*100>width*65L)continue;
+            if(!named && !ranged && value(n)<0 && !canStep(n))continue;
+            // Keep one node per wheel. A NumberPicker may expose its own editable child too.
+            boolean nested=false;
+            for(int i=0;i<found.size();i++){
+                AccessibilityNodeInfo outer=found.get(i);
+                if(!descendsFrom(n,outer))continue;
+                if(!canStep(outer) && outer.getRangeInfo()==null && !outer.isEditable() &&
+                    (canStep(n) || n.isEditable() || n.getRangeInfo()!=null))found.set(i,n);
+                nested=true;break;
             }
+            if(!nested)found.add(n);
         }
         found.sort(Comparator.comparingInt(n->bounds(n).centerX()));
         if(found.size()!=2)return Collections.emptyList();
@@ -182,6 +196,35 @@ final class ClockUi {
         }
         return found;
     }
+    static int timeInEditor(List<AccessibilityNodeInfo> nodes,List<AccessibilityNodeInfo> wheels){
+        int h=value(wheels.get(0)),m=value(wheels.get(1));
+        if(h>=0 && h<24 && m>=0 && m<60)return h*60+m;
+        // A compound picker may announce the complete time while its children supply the actions.
+        int known=-1;
+        Rect band=bounds(wheels.get(0));band.union(bounds(wheels.get(1)));
+        for(AccessibilityNodeInfo n:nodes){
+            Rect box=bounds(n);
+            if(box.centerY()<band.top || box.centerY()>=band.bottom)continue;
+            for(String label:new String[]{state(n),desc(n),text(n)}){
+                Matcher spoken=SPOKEN_TIME.matcher(label);
+                if(!spoken.matches())continue;
+                int hh=Integer.parseInt(spoken.group(1)),mm=Integer.parseInt(spoken.group(2)),result=hh*60+mm;
+                if(h>=0 && h!=hh || m>=0 && m!=mm || known>=0 && known!=result)return -1;
+                known=result;
+            }
+        }
+        return known;
+    }
+    private static boolean descendsFrom(AccessibilityNodeInfo child,AccessibilityNodeInfo parent){
+        for(AccessibilityNodeInfo n=child.getParent();n!=null;n=n.getParent())if(n.equals(parent))return true;
+        return false;
+    }
+    private static boolean canStep(AccessibilityNodeInfo n){
+        List<AccessibilityAction> actions=n.getActionList();
+        return n.isScrollable() || actions.contains(AccessibilityAction.ACTION_SCROLL_FORWARD) ||
+            actions.contains(AccessibilityAction.ACTION_SCROLL_BACKWARD) || actions.contains(AccessibilityAction.ACTION_SCROLL_DOWN) ||
+            actions.contains(AccessibilityAction.ACTION_SCROLL_UP);
+    }
     // Support reports contain roles and static resource IDs only, never labels or screen contents.
     static String describe(List<AccessibilityNodeInfo> nodes){
         int switches=0,scroll=0;
@@ -189,19 +232,26 @@ final class ClockUi {
         Set<String> widgets=new LinkedHashSet<>();
         for(AccessibilityNodeInfo n:nodes){
             if(n.isCheckable())switches++;
-            if(n.isScrollable())scroll++;
+            if(canStep(n))scroll++;
             String type=String.valueOf(n.getClassName());
             boolean editorControl=title!=null && (saveLabel(n) || type.toLowerCase(Locale.ROOT).contains("picker") ||
                 n.isClickable() && bounds(n).centerY()<=bounds(title).bottom);
-            if(widgets.size()>=10 || !(n.isScrollable() || n.isCheckable() || n.getRangeInfo()!=null || editorControl))continue;
+            if(widgets.size()>=10 || !(canStep(n) || n.isEditable() || n.isCheckable() || n.getRangeInfo()!=null || editorControl))continue;
             String resource=id(n);
             widgets.add(type.substring(type.lastIndexOf('.')+1)+(resource.isEmpty()?"":" / "+resource));
         }
-        return "Переключателей "+switches+" · прокручиваемых элементов "+scroll
+        String editor="";
+        if(title!=null){
+            List<AccessibilityNodeInfo> fields=wheels(nodes);
+            int time=fields.size()==2?timeInEditor(nodes,fields):-1;
+            editor="Редактор · полей времени "+fields.size()+(time<0?"":String.format(Locale.ROOT," · %02d:%02d",time/60,time%60))
+                +" · сохранение "+(save(nodes)==null?"не найдено":"доступно")+"\n";
+        }
+        return editor+"Переключателей "+switches+" · прокручиваемых элементов "+scroll
             +(widgets.isEmpty()?"":"\n"+String.join(", ",widgets));
     }
     private static int number(AccessibilityNodeInfo node){
-        for(String s:new String[]{text(node),desc(node)}){
+        for(String s:new String[]{state(node),text(node),desc(node)}){
             Matcher m=NUMBER.matcher(s);
             if(m.matches())return Integer.parseInt(m.group(1));
         }
@@ -216,6 +266,7 @@ final class ClockUi {
         for(AccessibilityNodeInfo n:tree(wheel)){
             int v=number(n);
             if(v<0)continue;
+            if(n.isSelected())return v;
             int distance=Math.abs(bounds(n).centerY()-center);
             if(distance<best){best=distance;value=v;}
             else if(distance==best && value!=v)value=-1;
@@ -229,13 +280,22 @@ final class ClockUi {
             if(wheel.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.getId(),args))return true;
         }
         boolean forward=(target-current+cycle)%cycle<=cycle/2;
-        int action=forward?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
-        if(!stalled && wheel.performAction(action))return true;
+        AccessibilityAction step=forward?AccessibilityAction.ACTION_SCROLL_FORWARD:AccessibilityAction.ACTION_SCROLL_BACKWARD;
+        AccessibilityAction direction=forward?AccessibilityAction.ACTION_SCROLL_DOWN:AccessibilityAction.ACTION_SCROLL_UP;
+        if(!stalled && wheel.getActionList().contains(step) && wheel.performAction(step.getId()))return true;
+        if(wheel.getActionList().contains(direction) && wheel.performAction(direction.getId()))return true;
+        List<AccessibilityNodeInfo> children=tree(wheel);
+        for(AccessibilityNodeInfo field:children){
+            if(!field.isEditable() || number(field)!=current || !field.getActionList().contains(AccessibilityAction.ACTION_SET_TEXT))continue;
+            Bundle args=new Bundle();
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,String.format(Locale.ROOT,"%02d",target));
+            if(field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,args))return true;
+        }
         // Some OEM wheels expose adjacent values as buttons but do not expose a scroll action.
         int next=(current+(forward?1:-1)+cycle)%cycle;
-        for(AccessibilityNodeInfo child:tree(wheel)){
+        for(AccessibilityNodeInfo child:children){
             if(number(child)==next && child.isClickable())return click(child);
         }
-        return stalled && wheel.performAction(action);
+        return wheel.performAction(step.getId());
     }
 }
