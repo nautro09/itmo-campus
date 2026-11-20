@@ -112,8 +112,12 @@ final class Link {
         int code = e instanceof HttpFailure ? ((HttpFailure)e).status : 0;
         if (code == 401 || code == 403)
             return "Сервер отклонил привязку. Проверь автоматическое время Android и открой новый QR из своего бота.";
-        if (e instanceof GeneralSecurityException || e instanceof javax.net.ssl.SSLException)
-            return "Не удалось проверить ключ или защищённое соединение. Проверь дату телефона и привязку.";
+        if (e instanceof SignatureException)
+            return "Подпись ответа не совпала. Открой привязку в своём Telegram-боте.";
+        if (e instanceof GeneralSecurityException)
+            return "Android не смог открыть ключ привязки. Открой новый QR в своём боте.";
+        if (e instanceof javax.net.ssl.SSLException)
+            return "Защищённое соединение прервано. Проверь доступность адреса Пары из Telegram.";
         if (code == 409) return "Расписание изменилось во время проверки. Запрашиваю новый план.";
         android.net.ConnectivityManager cm = c.getSystemService(android.net.ConnectivityManager.class);
         if (cm.getActiveNetwork() == null) return "Телефон без сети. Проверка повторится при подключении.";

@@ -113,6 +113,25 @@ public final class ClockAccess extends AccessibilityService {
     // Android interrupts spoken/haptic feedback on focus changes. This service produces neither.
     // Disconnect, screen lock, revocation and a lost foreground window are handled separately.
     @Override public void onInterrupt(){}
+    @Override protected void dump(java.io.FileDescriptor fd,java.io.PrintWriter out,String[] args){
+        // Invoked by the Android system for an authorized dumpsys session. No screen text or device keys.
+        if(args==null || args.length!=1 || !"clock".equals(args[0]))return;
+        out.println("Служба Пары: "+(connected==this?"подключена":"отключена"));
+        if(!unlocked() || !prefs().getBoolean("autoClock",false) || !prefs().contains("cipher"))return;
+        out.println(prefs().getString("autoStatus",""));
+        Intent expected=systemClock(this);
+        if(expected==null)return;
+        String expectedPackage=expected.getPackage();
+        AccessibilityNodeInfo root=foreground(expectedPackage);
+        if(root==null || !expectedPackage.equals(String.valueOf(root.getPackageName())))return;
+        List<AccessibilityNodeInfo> nodes=ClockUi.tree(root);
+        if(ClockUi.editing(nodes)){out.println(ClockUi.describe(nodes));return;}
+        List<ClockUi.Row> rows=ClockUi.rows(nodes);
+        if(!rows.isEmpty()){
+            ClockUi.Row first=rows.get(0);
+            out.println("Первая строка: "+first.time+" · "+(first.toggle.isChecked()?"включена":"выключена"));
+        }
+    }
     private void reset(){
         handler.removeCallbacks(tick);revision="";editor=null;nextStep=0;
         prefs().edit().remove("clockInProgress").apply();

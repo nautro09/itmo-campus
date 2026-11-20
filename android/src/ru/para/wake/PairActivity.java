@@ -51,7 +51,7 @@ public final class PairActivity extends Activity {
             } catch (Exception failed) {
                 runOnUiThread(() -> {
                     if (!isFinishing() && !isDestroyed())
-                        error("Проверь подключение и открой новый QR. Код действует пять минут и подходит для одной привязки.");
+                        error(Link.explain(this,failed)+" Код привязки действует пять минут.");
                 });
             }
         });

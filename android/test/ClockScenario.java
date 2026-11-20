@@ -17,7 +17,7 @@ final class ClockScenario {
     boolean secondEnabled=true;
     boolean secondVisible=true;
     int edits,toggles,wrongClicks;
-    boolean honor;
+    boolean honor,honorButtons;
     String time="09:50";
     LinearLayout page;
     Dialog host,dialog;
@@ -76,7 +76,8 @@ final class ClockScenario {
         Button save=new Button(activity);save.setContentDescription("Готово");toolbar.addView(save);
         LinearLayout pair=new LinearLayout(activity);sheet.addView(pair);
         int[] selected={Integer.parseInt(time.substring(0,2)),Integer.parseInt(time.substring(3))};
-        for(int i=0;i<2;i++){
+        if(honorButtons)HonorButtons.mount(pair,selected);
+        else for(int i=0;i<2;i++){
             final int index=i,cycle=i==0?24:60;
             FrameLayout wrapper=new FrameLayout(activity);wrapper.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
             pair.addView(wrapper,new LinearLayout.LayoutParams(130,140));
@@ -224,12 +225,15 @@ final class ClockScenario {
         }
         // Reproduce the disabled 07:21 row, then the 08:31 row from the handset recordings.
         AccessibilityServiceInfo info=access.getServiceInfo();
-        info.flags|=AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        info.flags|=AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS|AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS;
         access.setServiceInfo(info);
         fixture.honor=true;
-        for(String start:new String[]{"07:21","08:31"}){
+        String[][] scenarios={{"07:21","08:30"},{"08:31","08:30"},{"07:21","08:30"},{"23:59","00:00"},{"08:31","08:30"}};
+        for(int scenario=0;scenario<scenarios.length;scenario++){
+            fixture.honorButtons=scenario>=2;
+            String start=scenarios[scenario][0], expected=scenarios[scenario][1];
             test.runOnMainSync(()->{fixture.time=start;fixture.enabled=false;fixture.list();});
-            ClockEditor editor=new ClockEditor(true,"08:30");
+            ClockEditor editor=new ClockEditor(true,expected);
             Thread.sleep(350);
             AccessibilityNodeInfo before=access.getRootInActiveWindow();
             editor.advance(ClockUi.tree(before));
@@ -240,10 +244,15 @@ final class ClockScenario {
                 if(front==null)continue;
                 List<AccessibilityNodeInfo> nodes=ClockUi.tree(front);
                 if(ClockUi.editing(nodes) && front.getWindowId()!=before.getWindowId())dialogSeen=true;
+                if(fixture.honorButtons && ClockUi.editing(nodes)){
+                    List<AccessibilityNodeInfo> columns=ClockUi.wheels(nodes);
+                    PlanScenario.check(columns.size()==2 && ClockUi.id(columns.get(0)).equals("hwtimepicker_hour")
+                        && ClockUi.id(columns.get(1)).equals("hwtimepicker_minute"),"select actual MagicOS wheels, not overlay inputs");
+                }
                 editor.advance(nodes);
             }
-            PlanScenario.check(dialogSeen && editor.verified && fixture.enabled && fixture.time.equals("08:30") &&
-                fixture.secondEnabled && fixture.wrongClicks==0,"focused Clock dialog "+start+" -> 08:30: "+editor.trace+" / "+editor.failure);
+            PlanScenario.check(dialogSeen && editor.verified && fixture.enabled && fixture.time.equals(expected) &&
+                fixture.secondEnabled && fixture.wrongClicks==0,"focused Clock dialog "+start+" -> "+expected+": "+editor.trace+" / "+editor.failure);
         }
     }
 }

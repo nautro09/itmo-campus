@@ -163,6 +163,19 @@ final class ClockUi {
         Rect titleBox=bounds(title);
         int top=titleBox.contains(bounds(repeat))?titleBox.top:titleBox.bottom,bottom=bounds(repeat).top;
         int width=bounds(nodes.get(0)).width();
+        AccessibilityNodeInfo honorPicker=uniqueId(nodes,"alarm_timepicker");
+        if(honorPicker!=null){
+            List<AccessibilityNodeInfo> inside=tree(honorPicker);
+            AccessibilityNodeInfo hour=uniqueId(inside,"hwtimepicker_hour");
+            AccessibilityNodeInfo minute=uniqueId(inside,"hwtimepicker_minute");
+            if(hour!=null || minute!=null){
+                if(hour==null || minute==null)return found;
+                Rect h=bounds(hour),m=bounds(minute);
+                if(h.isEmpty() || m.isEmpty() || h.right>m.left || Math.min(h.bottom,m.bottom)<=Math.max(h.top,m.top)
+                    || h.centerY()<top || m.centerY()<top || h.centerY()>=bottom || m.centerY()>=bottom)return found;
+                return Arrays.asList(hour,minute);
+            }
+        }
         for(AccessibilityNodeInfo n:nodes){
             Rect box=bounds(n);
             if(box.isEmpty() || box.centerY()<top || box.centerY()>=bottom)continue;
@@ -257,7 +270,53 @@ final class ClockUi {
         }
         return -1;
     }
+    private static AccessibilityNodeInfo uniqueId(List<AccessibilityNodeInfo> nodes,String name){
+        AccessibilityNodeInfo match=null;
+        for(AccessibilityNodeInfo n:nodes)if(id(n).equals(name)){
+            if(match!=null)return null;
+            match=n;
+        }
+        return match;
+    }
+    private static int honorCycle(AccessibilityNodeInfo wheel){
+        switch(id(wheel)){
+            case "hwtimepicker_hour":return 24;
+            case "hwtimepicker_minute":return 60;
+            default:return 0;
+        }
+    }
+    // MagicOS exposes the preceding/following numbers on real buttons. The centered EditText is a sibling.
+    private static final class HonorWheel {
+        final AccessibilityNodeInfo upper,lower;
+        final int before,after,selected;
+        HonorWheel(AccessibilityNodeInfo wheel,int cycle){
+            List<AccessibilityNodeInfo> nodes=tree(wheel);
+            upper=uniqueId(nodes,"hwadvancednumberpicker_increment");
+            lower=uniqueId(nodes,"hwadvancednumberpicker_decrement");
+            before=upper==null?-1:number(upper);
+            after=lower==null?-1:number(lower);
+            int current=-1;
+            if(before>=0 && before<cycle && after>=0 && after<cycle
+                && (before+2)%cycle==after && bounds(upper).centerY()<bounds(lower).centerY()){
+                current=(before+1)%cycle;
+            }
+            AccessibilityNodeInfo center=uniqueId(nodes,"hwadvancednumberpicker_textview");
+            int explicit=center==null?-1:number(center);
+            if(explicit>=0 && explicit<cycle && (before<0 || before==(explicit+cycle-1)%cycle)
+                && (after<0 || after==(explicit+1)%cycle))current=explicit;
+            else if(explicit>=0)current=-1;
+            selected=current;
+        }
+        boolean move(int current,int target,int cycle){
+            if(selected!=current || current==target)return false;
+            int next=(target-current+cycle)%cycle<=cycle/2?(current+1)%cycle:(current+cycle-1)%cycle;
+            if(before==next)return click(upper);
+            return after==next && click(lower);
+        }
+    }
     static int value(AccessibilityNodeInfo wheel){
+        int cycle=honorCycle(wheel);
+        if(cycle!=0)return new HonorWheel(wheel,cycle).selected;
         AccessibilityNodeInfo.RangeInfo range=wheel.getRangeInfo();
         if(range!=null)return Math.round(range.getCurrent());
         int direct=number(wheel);
@@ -274,6 +333,7 @@ final class ClockUi {
         return value;
     }
     static boolean move(AccessibilityNodeInfo wheel,int current,int target,int cycle,boolean stalled){
+        if(honorCycle(wheel)==cycle)return new HonorWheel(wheel,cycle).move(current,target,cycle);
         if(!stalled && wheel.getRangeInfo()!=null && wheel.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS)){
             android.os.Bundle args=new android.os.Bundle();
             args.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,target);
