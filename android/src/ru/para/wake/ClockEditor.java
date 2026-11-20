@@ -64,7 +64,7 @@ final class ClockEditor {
             if(saving && destination!=null){
                 row=destination;stage=Stage.VERIFY;
             }else{
-                if(!original.isEmpty() && !original.equals(row.time)){
+                if(saving && !original.equals(row.time)){
                     trace="Сверяю первую строку с уже отправленным изменением";
                     failure="Порядок будильников изменился во время проверки";return;
                 }
@@ -115,7 +115,9 @@ final class ClockEditor {
         boolean unchanged=previous==current;
         if(unchanged){
             // Give an animated scroll time to settle. Try an exposed adjacent value once.
-            if(++stalled!=3){if(stalled>=8)failure="Колесо не отреагировало на изменение";return;}
+            stalled++;
+            if(stalled>=8){failure="Колесо не отреагировало на изменение";return;}
+            if(stalled!=3)return;
         }else{previous=current;stalled=0;}
         if(!ClockUi.move(wheels.get(hours?0:1),hours?h:m,hours?hour:minute,hours?24:60,unchanged))
             failure="Часы не разрешили изменить значение колеса";

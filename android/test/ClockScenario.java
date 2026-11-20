@@ -46,6 +46,15 @@ final class ClockScenario {
         NumberPicker n=new NumberPicker(activity);n.setMinValue(0);n.setMaxValue(max);n.setValue(value);
         row.addView(n,new LinearLayout.LayoutParams(150,260));return n;
     }
+    void rangeEditor(){
+        page();label("Изменить будильник");
+        LinearLayout row=new LinearLayout(activity);page.addView(row);
+        for(int max:new int[]{23,59}){
+            SeekBar range=new SeekBar(activity);range.setMax(max);range.setProgress(max==23?9:50);
+            row.addView(range,new LinearLayout.LayoutParams(180,100));
+        }
+        label("Один раз");
+    }
     void edit(){
         edits++;page();label("Изменить будильник");
         // The toolbar and wheels can appear in different frames on the stock Clock.
@@ -92,6 +101,11 @@ final class ClockScenario {
         legacyCheck(test,a);
         ClockScenario fixture=new ClockScenario(a);
         UiAutomation access=test.getUiAutomation();
+        test.runOnMainSync(fixture::rangeEditor);
+        List<AccessibilityNodeInfo> ranges=ClockUi.wheels(snapshot(access));
+        PlanScenario.check(ranges.size()==2 && ClockUi.value(ranges.get(0))==9 && ClockUi.value(ranges.get(1))==50
+            && ClockUi.move(ranges.get(1),50,30,60,false),"two numeric time controls without vendor IDs");
+        PlanScenario.check(ClockUi.value(ClockUi.wheels(snapshot(access)).get(1))==30,"minute range must report the change");
         test.runOnMainSync(()->{fixture.time=target;fixture.secondVisible=false;fixture.list();});
         ClockEditor sameTime=new ClockEditor(true,target,"09:50",false,(time,saving)->true,time->true);
         sameTime.advance(snapshot(access));

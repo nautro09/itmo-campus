@@ -157,20 +157,42 @@ final class ClockUi {
                 (cl.contains("spinner") || cl.endsWith("picker") && !cl.contains("timepicker") ||
                  id(n).matches(".*(?:hour|minute).*")))found.add(n);
         }
+        // Some vendor controls announce their numeric range, with no NumberPicker class or ID.
+        if(found.size()<2){
+            AccessibilityNodeInfo title=label(nodes,"Изменить будильник"),repeat=label(nodes,"Один раз");
+            if(repeat==null)repeat=label(nodes,"Без повтора");
+            if(title!=null && repeat!=null){
+                int top=bounds(title).bottom,bottom=bounds(repeat).top;
+                for(AccessibilityNodeInfo n:nodes){
+                    AccessibilityNodeInfo.RangeInfo range=n.getRangeInfo();
+                    if(range==null || range.getMin()!=0 || range.getMax()!=23 && range.getMax()!=59 || found.contains(n))continue;
+                    Rect frame=bounds(n);
+                    if(frame.top>=top && frame.bottom<=bottom && n.getActionList().contains(
+                        AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS))found.add(n);
+                }
+            }
+        }
         found.sort(Comparator.comparingInt(n->bounds(n).centerX()));
-        if(found.size()!=2 || bounds(found.get(0)).right>bounds(found.get(1)).left)return Collections.emptyList();
+        if(found.size()!=2)return Collections.emptyList();
+        Rect left=bounds(found.get(0)),right=bounds(found.get(1));
+        if(left.right>right.left || Math.min(left.bottom,right.bottom)<=Math.max(left.top,right.top))return Collections.emptyList();
+        for(int i=0;i<2;i++){
+            AccessibilityNodeInfo.RangeInfo range=found.get(i).getRangeInfo();
+            if(range!=null && range.getMin()==0 && range.getMax()==(i==0?59:23))return Collections.emptyList();
+        }
         return found;
     }
     // Support reports contain roles and static resource IDs only, never labels or screen contents.
     static String describe(List<AccessibilityNodeInfo> nodes){
         int switches=0,scroll=0;
-        boolean editing=label(nodes,"Изменить будильник")!=null;
+        AccessibilityNodeInfo title=label(nodes,"Изменить будильник");
         Set<String> widgets=new LinkedHashSet<>();
         for(AccessibilityNodeInfo n:nodes){
             if(n.isCheckable())switches++;
             if(n.isScrollable())scroll++;
             String type=String.valueOf(n.getClassName());
-            boolean editorControl=editing && (saveLabel(n) || type.endsWith("ImageButton") || type.toLowerCase(Locale.ROOT).contains("picker"));
+            boolean editorControl=title!=null && (saveLabel(n) || type.toLowerCase(Locale.ROOT).contains("picker") ||
+                n.isClickable() && bounds(n).centerY()<=bounds(title).bottom);
             if(widgets.size()>=10 || !(n.isScrollable() || n.isCheckable() || n.getRangeInfo()!=null || editorControl))continue;
             String resource=id(n);
             widgets.add(type.substring(type.lastIndexOf('.')+1)+(resource.isEmpty()?"":" / "+resource));
