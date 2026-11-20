@@ -20,11 +20,13 @@ final class ClockScenario {
     boolean honor;
     String time="09:50";
     LinearLayout page;
-    Dialog dialog;
+    Dialog host,dialog;
     ClockScenario(Activity activity){this.activity=activity;}
     void page(){
         page=new LinearLayout(activity);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(20,100,20,20);
-        activity.setContentView(page);
+        if(host==null)host=new Dialog(activity,android.R.style.Theme_Material_Light_NoActionBar);
+        host.setContentView(page);
+        if(!host.isShowing())host.show();
     }
     TextView label(String text){
         TextView v=new TextView(activity);v.setText(text);page.addView(v);return v;
@@ -145,16 +147,28 @@ final class ClockScenario {
         PlanScenario.check(!p.contains("originalTime") && !p.contains("savePending") && !p.contains("blockedRev")
             && !p.contains("autoApplied") && !p.contains("awaitClock") && rev.equals(p.getString("revision",""))
             && p.contains("cipher"),"manual recheck must start afresh and keep the pairing and plan");
-        Thread.sleep(300); // Let the real dashboard draw its new status before installing fixture widgets.
     }
     static void check(Instrumentation test, Activity a,String target)throws Exception{
         legacyCheck(test,a);
         ClockScenario fixture=new ClockScenario(a);
-        UiAutomation access=test.getUiAutomation();
+        try{checkWidgets(test,fixture,target);}
+        finally{test.runOnMainSync(()->{
+            if(fixture.dialog!=null)fixture.dialog.dismiss();
+            if(fixture.host!=null)fixture.host.dismiss();
+        });}
+    }
+    private static void checkWidgets(Instrumentation test,ClockScenario fixture,String target)throws Exception{
+        Activity a=fixture.activity;
+        UiAutomation access=test.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
         test.runOnMainSync(fixture::rangeEditor);
-        List<AccessibilityNodeInfo> ranges=ClockUi.wheels(snapshot(access));
-        PlanScenario.check(ranges.size()==2 && ClockUi.value(ranges.get(0))==9 && ClockUi.value(ranges.get(1))==50
-            && ClockUi.move(ranges.get(1),50,30,60,false),"two numeric time controls without vendor IDs");
+        List<AccessibilityNodeInfo> rangeNodes=snapshot(access);
+        List<AccessibilityNodeInfo> ranges=ClockUi.wheels(rangeNodes);
+        for(int i=0;i<10 && ranges.size()!=2;i++){
+            rangeNodes=snapshot(access);ranges=ClockUi.wheels(rangeNodes);
+        }
+        PlanScenario.check(ranges.size()==2 && ClockUi.value(ranges.get(0))==9 && ClockUi.value(ranges.get(1))==50,
+            "expected fixture time 09:50: "+ClockUi.describe(rangeNodes));
+        PlanScenario.check(ClockUi.move(ranges.get(1),50,30,60,false),"minute field rejected 50 -> 30");
         PlanScenario.check(ClockUi.value(ClockUi.wheels(snapshot(access)).get(1))==30,"minute range must report the change");
         test.runOnMainSync(()->{fixture.time=target;fixture.secondVisible=false;fixture.list();});
         ClockEditor sameTime=new ClockEditor(true,target,"09:50",false,(time,saving)->true,time->true);

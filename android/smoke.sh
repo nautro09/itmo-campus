@@ -17,6 +17,7 @@ for i in $(seq 1 25); do
 done
 ca=$(openssl x509 -in "$fixture/cert" -outform DER | base64 -w0)
 if ! result=$(timeout 150 adb shell am instrument -e ca "$ca" -w ru.para.wake.test/ru.para.wake.AlarmCheck); then
+    adb logcat -d -s 'ParaClockTest:I' '*:S'
     adb logcat -d -b crash
     exit 1
 fi
