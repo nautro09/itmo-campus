@@ -25,7 +25,7 @@ target="$SSH_USER@$SSH_HOST"
 remote="itmo-campus/releases/$GITHUB_SHA-$GITHUB_RUN_ID-${GITHUB_RUN_ATTEMPT:-1}"
 sshpass -e ssh "${options[@]}" -p "$SSH_PORT" "$target" "umask 077; mkdir -p '$remote'"
 sshpass -e scp "${options[@]}" -P "$SSH_PORT" \
-    dist/image.tar.gz deploy/compose.production.yaml deploy/compose.gateway.yaml \
+    dist/image.tar.gz dist/image.ref deploy/compose.production.yaml deploy/compose.gateway.yaml \
     deploy/release.sh deploy/prepare.sh deploy/setup-gateway.sh deploy/app.env.example "$target:$remote/"
 sshpass -e scp "${options[@]}" -P "$SSH_PORT" -r deploy/gateway "$target:$remote/"
 sshpass -e ssh "${options[@]}" -p "$SSH_PORT" "$target" "bash '$remote/release.sh' '$GITHUB_SHA'"

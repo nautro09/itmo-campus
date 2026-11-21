@@ -14,7 +14,7 @@ class DeploymentTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.revision = "a" * 40
-        self.release = self.root / "releases" / self.revision
+        self.release = self.root / "releases" / f"{self.revision}-123-1"
         self.release.mkdir(parents=True)
         source = Path(__file__).resolve().parents[1] / "deploy"
         for name in ("release.sh", "compose.production.yaml", "compose.gateway.yaml",
@@ -22,6 +22,8 @@ class DeploymentTests(unittest.TestCase):
             shutil.copyfile(source / name, self.release / name)
         shutil.copytree(source / "gateway", self.release / "gateway")
         (self.release / "image.tar.gz").touch()
+        self.image = f"itmo-campus:{self.revision}-123-1"
+        (self.release / "image.ref").write_text(self.image + "\n")
         (self.root / "data").mkdir()
         (self.root / ".private").mkdir()
         (self.root / ".private/.env").write_text("BOT_TOKEN=123:fixture\n")
@@ -30,6 +32,10 @@ class DeploymentTests(unittest.TestCase):
         self.bin.mkdir()
         self.command("docker", '''#!/bin/bash
 echo "$CAMPUS_IMAGE $*" >> "$CAMPUS_ROOT/calls"
+if [[ $* == 'image inspect '* && $3 != "$AVAILABLE_IMAGE" ]]; then
+    echo "No such image: $3" >&2
+    exit 1
+fi
 if [[ $* == 'load '* && ${FAIL_LOAD:-0} == 1 ]]; then exit 1; fi
 if [[ $* == *'itmo-campus-gateway'* && ${FAIL_GATEWAY:-0} == 1 ]]; then exit 1; fi
 if [[ " $* " == *' up '* && " $* " == *' bot '* ]]; then
@@ -58,7 +64,8 @@ exit "${FAIL_HTTP:-0}"
         return old
 
     def run_release(self, **flags):
-        env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", **flags}
+        env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}",
+               "AVAILABLE_IMAGE": self.image, **flags}
         return subprocess.run(["bash", str(self.release / "release.sh"), self.revision],
                               env=env, capture_output=True, text=True, timeout=15)
 
@@ -82,6 +89,30 @@ exit "${FAIL_HTTP:-0}"
         self.assertIn("Previous release restored", result.stderr)
         self.assertEqual((self.root / "current").resolve(), old)
         self.assertIn("itmo-campus:old compose", self.calls())
+
+    def test_deploy_retry_uses_image_from_original_build_attempt(self):
+        retry = self.release.with_name(f"{self.revision}-123-2")
+        self.release.rename(retry)
+        self.release = retry
+        result = self.run_release()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"image inspect {self.image}", self.calls())
+        self.assertEqual((self.release / "image").read_text().strip(), self.image)
+        self.assertEqual((self.root / "current").resolve(), retry)
+
+    def test_missing_image_metadata_fails_before_docker(self):
+        (self.release / "image.ref").unlink()
+        result = self.run_release()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Image metadata missing", result.stderr)
+        self.assertFalse((self.root / "calls").exists())
+
+    def test_image_for_another_commit_is_rejected(self):
+        (self.release / "image.ref").write_text(f"itmo-campus:{'b' * 40}-123-1\n")
+        result = self.run_release()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("another commit", result.stderr)
+        self.assertFalse((self.root / "calls").exists())
 
     def test_http_failure_also_rolls_back(self):
         old = self.old_release()
@@ -162,5 +193,6 @@ class SSHDeploymentTests(unittest.TestCase):
             calls = (root / "calls").read_text()
             self.assertIn("StrictHostKeyChecking=accept-new", calls)
             self.assertIn("deploy/compose.gateway.yaml", calls)
+            self.assertIn("dist/image.ref", calls)
             self.assertIn("deploy/gateway", calls)
             self.assertNotIn(env["SSH_PASSWORD"], calls + result.stdout + result.stderr)

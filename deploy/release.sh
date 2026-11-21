@@ -9,7 +9,18 @@ export CAMPUS_ROOT
 CAMPUS_ROOT=$(cd -- "$release/../.." && pwd)
 release_id=${release##*/}
 [[ $release_id =~ ^$revision(-[0-9]+-[0-9]+)?$ ]] || { echo 'Invalid release directory' >&2; exit 1; }
-export CAMPUS_IMAGE="itmo-campus:$release_id"
+# A deploy-only rerun reuses an artifact built in an earlier run attempt.
+# The release directory identifies this deployment, not the image build.
+[[ -f $release/image.ref ]] || {
+    echo 'Image metadata missing; run the full workflow from the updated commit' >&2
+    exit 1
+}
+export CAMPUS_IMAGE
+CAMPUS_IMAGE=$(cat "$release/image.ref")
+[[ $CAMPUS_IMAGE =~ ^itmo-campus:$revision-[0-9]+-[0-9]+$ ]] || {
+    echo 'Invalid image metadata or image belongs to another commit' >&2
+    exit 1
+}
 cd "$CAMPUS_ROOT"
 
 exec 9>"$CAMPUS_ROOT/deploy.lock"

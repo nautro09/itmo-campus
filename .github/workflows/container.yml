@@ -53,12 +53,17 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
           mkdir -p dist
-          docker save "itmo-campus:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" | gzip -1 > dist/image.tar.gz
+          image="itmo-campus:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker save "$image" | gzip -1 > dist/image.tar.gz
+          printf '%s\n' "$image" > dist/image.ref
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           name: production-image
-          path: dist/image.tar.gz
+          path: |
+            dist/image.tar.gz
+            dist/image.ref
+          overwrite: true
           compression-level: 0
           retention-days: 1
           if-no-files-found: error
