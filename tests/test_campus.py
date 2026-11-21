@@ -4,7 +4,7 @@ import json
 import sys
 import time
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 from urllib.parse import urlencode

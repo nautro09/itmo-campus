@@ -1,0 +1,38 @@
+name: itmo-campus-gateway
+services:
+  nginx:
+    image: nginx:1.30
+    network_mode: host
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/scripts/nginx.sh"]
+    volumes:
+      - ${CAMPUS_ROOT:?Set CAMPUS_ROOT}/gateway/conf.d:/etc/nginx/conf.d:ro
+      - ./gateway:/scripts:ro
+      - certificates:/etc/letsencrypt:ro
+      - acme:/var/www/acme:ro
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "-H", "Host: campus.flacoo.ru", "http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  certbot:
+    image: certbot/certbot:v5.1.0
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/scripts/renew.sh"]
+    volumes:
+      - ./gateway:/scripts:ro
+      - certificates:/etc/letsencrypt
+      - acme:/var/www/acme
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  certificates:
+  acme:

@@ -13,6 +13,8 @@ storage_state*.json
 auth*.json
 cookies*.json
 .venv/
+.ruff_cache/
+dist/
 .browsers/
 __pycache__/
 *.pyc

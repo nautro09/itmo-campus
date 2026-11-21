@@ -1,59 +1,157 @@
-# Бот на Ubuntu 22.04
+# Автодеплой campus.flacoo.ru
 
-Понадобятся Git, Docker Engine с Compose v2 и пользователь с доступом к Docker. Команды выполняются под одним пользователем. [Установка Docker на Ubuntu](https://docs.docker.com/engine/install/ubuntu/)
+GitHub Actions проверяет Ruff, ShellCheck, синтаксис JavaScript, оба production Compose,
+собирает Docker-образ и запускает тесты приложения, Chromium и сценариев деплоя.
+Дополнительный Docker-тест проверяет HTTP/ACME, HTTPS-проксирование, запрет приватного
+API без Telegram-авторизации и автоматический reload nginx при замене сертификата.
+Проверки работают на push и pull request. Автодеплой — только из main после всех проверок.
+Android остаётся отдельным workflow и не блокирует деплой серверного приложения.
 
-## Первый запуск
+## Только три секрета GitHub
 
-```sh
-git clone https://github.com/nautro09/itmo-campus.git ~/itmo-campus
-cd ~/itmo-campus
+Settings → Secrets and variables → Actions:
+
+| Secret | Значение |
+| --- | --- |
+| `SSH_HOST` | IPv4 или hostname VPS |
+| `SSH_USER` | SSH-пользователь, например root |
+| `SSH_PASSWORD` | Пароль этого пользователя |
+
+SSH работает на порту 22. Для другого порта можно дополнительно задать SSH_PORT.
+Публичный ключ, SSH_KNOWN_HOSTS и registry token не требуются. Используется
+StrictHostKeyChecking=accept-new: первый ключ принимается автоматически, а остальные
+соединения этого запуска проверяются по нему. Между запусками ключ не закрепляется;
+независимой проверки подлинности первого соединения нет.
+
+## Один раз: токен приложения
+
+Локально подготовлены два игнорируемых Git файла:
+
+- `.env` — UID/GID контейнера (1000:1000);
+- `.private/.env` — BOT_TOKEN, OWNER_TELEGRAM_ID и настройки приложения.
+
+В `.private/.env` уже задан MINI_APP_URL=https://campus.flacoo.ru. Заполните BOT_TOKEN
+из BotFather и числовой OWNER_TELEGRAM_ID. Токен нельзя получить из SSH-пароля.
+Не коммитьте заполненные файлы; workflow не загружает их из GitHub.
+
+На сервере под выбранным SSH-пользователем:
+
+```bash
 umask 077
-mkdir -p data .private
-cp -n .env.example .private/.env
-printf 'CAMPUS_UID=%s\nCAMPUS_GID=%s\n' "$(id -u)" "$(id -g)" > .env
-nano .private/.env
+mkdir -p "$HOME/itmo-campus/.private"
+nano "$HOME/itmo-campus/.private/.env"
 ```
 
-В **.private/.env** заполни BOT_TOKEN и MINI_APP_URL (публичный HTTPS-адрес сервера), при необходимости добавь почтовые настройки. Настрой DNS и HTTPS. Например, в Caddy на хосте укажи свой домен и проксируй запросы:
+Минимальное содержимое:
 
-```caddy
-campus.example.org {
-    reverse_proxy 127.0.0.1:8787
-}
+```dotenv
+BOT_TOKEN=123456789:YOUR_BOT_TOKEN
+OWNER_TELEGRAM_ID=123456789
+MINI_APP_URL=https://campus.flacoo.ru
 ```
 
-Перед переключением останови бота на Mac. Для переноса заданий, писем и привязки чата скопируй базу из остановленной папки data в data на сервере по SSH. У владельца контейнера должны быть права записи. Можно приватно перенести настройки Mac в .private/.env и заменить временный туннель постоянным адресом. Администратор хоста имеет доступ к этим файлам.
+Можно вместо редактора загрузить подготовленный локальный `.private/.env` по SCP
+в эту папку. Скрипт автоматически создаст остальные каталоги, `.env` с UID/GID и
+выставит права для контейнера. Существующие настройки и данные сохраняются.
+Если токен не заполнен, первый workflow создаст шаблон `.private/.env`, остановится
+с понятным сообщением до запуска приложения и сертификата. Заполните файл и нажмите
+Re-run all jobs. Это ошибка настройки deploy, а не падение тестов приложения.
 
-```sh
-sh deploy/update.sh
-docker compose ps
-docker compose logs --tail=30 bot
+Нужны Linux amd64, Docker Engine с Compose v2 (`up --wait`), bash, curl и util-linux
+(flock). SSH-пользователь должен иметь доступ к Docker. Для Ubuntu при необходимости:
+
+```bash
+apt-get update
+apt-get install -y curl util-linux
 ```
 
-Для первой привязки нового чата используй код из логов. В обычной работе графический экран не требуется. Для входа в ИТМО ID и ИСУ на сервере подключись с Mac по SSH с X11 forwarding (локально нужен работающий XQuartz, на сервере xauth и разрешённый X11Forwarding). Из этой SSH-сессии выполни:
+Образ содержит Chromium: оставьте место для архива и нескольких образов (несколько ГБ).
+Старые образы автоматически не удаляются. Если старый бот работает на другом устройстве,
+остановите его перед первым запуском на VPS: один Telegram-токен — один polling-процесс.
+Старый cron с deploy/update.sh отключите.
 
-```sh
-cd ~/itmo-campus
-docker compose stop bot
-for source in itmo isu; do
-  docker run --rm -it --init --network host --shm-size=1g \
-    --user "$(id -u):$(id -g)" -e DISPLAY -e XAUTHORITY=/tmp/campus-xauth \
-    -v "${XAUTHORITY:-$HOME/.Xauthority}:/tmp/campus-xauth:ro" \
-    -v "$PWD/data:/app/data" itmo-campus:local python connect.py "$source" || break
-done
-docker compose up -d
+## nginx и сертификат — тоже в Docker
+
+Состав деплоя:
+
+- проект `itmo-campus`, сервис `bot`, порт только 127.0.0.1:8787;
+- проект `itmo-campus-gateway`, сервис `nginx`, host network, TCP/80 и TCP/443;
+- сервис `certbot`, выпуск и продление Let's Encrypt через HTTP-01.
+
+DNS campus.flacoo.ru должен вести на VPS; TCP/80 и TCP/443 должны быть свободны и
+доступны извне. AAAA должна вести на рабочий IPv6 этого же сервера либо отсутствовать.
+В предоставленном выводе ss эти порты были свободны. **Если вы уже добавили campus-блоки
+в remnawave-nginx по предыдущей инструкции, удалите только эти campus-блоки и выполните
+nginx -t / reload в том контейнере перед первым новым деплоем.** Иначе два nginx будут
+конкурировать за 80/443. Существующие блоки neth и Unix-сокет оставьте.
+
+При первом запуске workflow:
+
+1. Загружает тот же образ, который прошёл тесты.
+2. Поднимает nginx с HTTP-конфигурацией для ACME.
+3. Выпускает сертификат campus.flacoo.ru через Certbot (принимает условия Let's Encrypt,
+   регистрирует ACME-аккаунт без email, чтобы не требовать четвёртого секрета).
+4. Проверяет и включает HTTPS; запускает постоянный контейнер продления.
+5. Обновляет бота, ждёт healthcheck и проверяет HTTP и HTTPS приложения.
+
+Certbot проверяет продление каждые 12 часов. nginx замечает замену сертификата в течение
+60 секунд и выполняет nginx -t + reload. Сертификаты и ACME-данные хранятся в именованных
+Docker volumes проекта gateway. Не удаляйте их через compose down -v / volume prune.
+Ни Docker socket, ни секреты бота в nginx/Certbot не монтируются.
+
+Настройка системного nginx, certbot.timer или ручной выпуск сертификата не нужны.
+Remnawave, его Compose, сертификат neth и Unix-сокет скрипт не изменяет и не перезапускает.
+
+## Проверка и перезапуск
+
+После push/merge в main:
+
+```bash
+cd "$HOME/itmo-campus"
+export CAMPUS_ROOT="$PWD"
+export CAMPUS_IMAGE=$(cat current/image)
+docker compose -p itmo-campus --env-file .env -f current/compose.production.yaml ps
+docker compose -p itmo-campus-gateway --env-file .env -f current/compose.gateway.yaml ps
+curl --fail https://campus.flacoo.ru/
 ```
 
-Вход выполняет владелец учётной записи. Если ИТМО завершит сеанс, повтори вход для соответствующего источника.
+После редактирования `.private/.env` достаточно перезапустить бота:
 
-## Обновления
-
-Для ручного обновления выполни `sh deploy/update.sh` из папки проекта. Для автоматического запусти `crontab -e` под тем же пользователем и добавь:
-
-```cron
-*/5 * * * * /bin/sh "$HOME/itmo-campus/deploy/update.sh" >> "$HOME/itmo-campus/.private/update.log" 2>&1
+```bash
+cd "$HOME/itmo-campus"
+export CAMPUS_ROOT="$PWD"
+export CAMPUS_IMAGE=$(cat current/image)
+docker compose -p itmo-campus --env-file .env -f current/compose.production.yaml restart bot
 ```
 
-Раз в пять минут сервер проверяет main. При новом коммите он собирает образ и пересоздаёт контейнер. Если сборка сорвётся, текущий контейнер продолжит работать, а cron повторит попытку. База, сеансы Chromium и секреты хранятся в каталогах на сервере и переживают пересоздание. Включи автозапуск службы Docker при загрузке Ubuntu. Политика unless-stopped поднимет бота после перезагрузки или падения процесса. Для проверки обновлений смотри .private/update.log и docker compose ps.
+Логи:
 
-Если на сервере работает Hysteria, см. [варианты портов, конфигурацию Nginx и выпуск сертификата](nginx/README.md). Эти файлы подключаются вручную.
+```bash
+docker compose -p itmo-campus --env-file .env -f current/compose.production.yaml logs --tail=50 bot
+docker compose -p itmo-campus-gateway --env-file .env -f current/compose.gateway.yaml logs --tail=50 nginx certbot
+```
+
+Скрипт сериализует деплои через flock; GitHub также выполняет deploy последовательно.
+При ошибке HTTPS-шлюза ещё работающий бот не заменяется. При ошибке запуска нового бота
+или итогового HTTP/HTTPS-запроса возвращается предыдущий образ/Compose бота; job остаётся
+красным. Gateway управляется отдельно; его уже выпущенный сертификат сохраняется.
+База при откате не откатывается: перед несовместимыми миграциями нужна резервная копия.
+Пересоздание одного бота даёт короткий перерыв. Healthcheck не проверяет все внешние
+сервисы ИТМО/почты; вход в них выполняет владелец аккаунта по основному README.
+
+## Локальные проверки
+
+```bash
+python -m pip install -r requirements-dev.txt
+ruff check .
+shellcheck deploy/*.sh deploy/gateway/*.sh
+docker build -t itmo-campus:ci-check .
+docker run --rm --init --shm-size=1g -e TEST_ISU_BROWSER=1 \
+  -v "$PWD/tests:/app/tests:ro" -v "$PWD/deploy:/app/deploy:ro" \
+  itmo-campus:ci-check python -m unittest discover -s tests -v
+python tests/gateway_smoke.py
+```
+
+Интеграционный тест использует временные самоподписанные сертификаты, временные Docker
+контейнеры/volume, локальную БД и не обращается к Let's Encrypt или Telegram.
+Реальный сертификат можно проверить только при деплое на VPS с доступным DNS/HTTP.
