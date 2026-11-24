@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import tempfile
@@ -35,11 +36,19 @@ class InlineScripts(HTMLParser):
             self.hashes.append("'sha256-" + digest + "'")
 
 
+def viewer_connect_sources(origin):
+    # Some WebViews evaluate WebSocket and HTTPS schemes separately for CSP.
+    if re.fullmatch(r"https://[a-zA-Z0-9.-]+(?::[0-9]{1,5})?/?", origin):
+        return "'self' wss://" + origin[8:].rstrip("/")
+    return "'self'"
+
+
 def viewer_policy():
     parser = InlineScripts()
     parser.feed((ASSETS / "vnc.html").read_text())
     return ("default-src 'self'; script-src 'self' " + " ".join(parser.hashes)
-            + "; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; "
+            + "; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src "
+            + viewer_connect_sources(os.getenv("MINI_APP_URL","")) + "; "
               "object-src 'none'; base-uri 'self'; form-action 'none'")
 
 
