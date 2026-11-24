@@ -34,6 +34,12 @@ grep -Eq '^BOT_TOKEN=.+:.+' .private/.env || {
     echo "Fill BOT_TOKEN in $CAMPUS_ROOT/.private/.env, then rerun the workflow" >&2
     exit 1
 }
+if [[ -f $release/access.env ]]; then
+    install -m 600 "$release/access.env" .private/access.env.next
+    if [[ $(id -u) == 0 ]]; then chown --reference=.private/.env .private/access.env.next; fi
+    mv -f .private/access.env.next .private/access.env
+    rm -- "$release/access.env"
+fi
 command -v curl >/dev/null
 docker info >/dev/null
 docker compose version

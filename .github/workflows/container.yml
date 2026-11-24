@@ -102,4 +102,6 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
+          CAMPUS_OWNER_ID: ${{ secrets.CAMPUS_OWNER_ID }}
+          ADMIN_VERIFY_SHA256: ${{ secrets.ADMIN_VERIFY_SHA256 }}
         run: bash deploy/ssh-deploy.sh

@@ -141,10 +141,10 @@ class Portal:
                 await self.engine.stop()
                 self.engine = None
 
-    async def open(self, headed):
+    async def open(self, headed, env=None):
         self.engine = await async_playwright().start()
         self.context = await self.engine.chromium.launch_persistent_context(
-            str(self.profile), headless=not headed, locale="ru-RU", timezone_id="Europe/Moscow"
+            str(self.profile), env=env, headless=not headed, locale="ru-RU", timezone_id="Europe/Moscow"
         )
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
         await self.page.goto(PORTAL, wait_until="domcontentloaded", timeout=30000)
@@ -195,11 +195,11 @@ class Portal:
             raise LoginNeeded("Нужно войти в ИТМО ID. Открой «Настройки» → «Войти в my.itmo».")
         raise SourceError("Не удалось загрузить экран личного расписания my.itmo.")
 
-    async def login(self):
+    async def login(self, env=None):
         async with self.lock:
             await self.close()
             try:
-                await self.open(headed=True)
+                await self.open(headed=True,env=env)
                 await self.authorized_week(datetime.now(MSK).date(), interactive=True)
             except BrowserError:
                 raise SourceError("Вход не завершён. Открой окно Chromium на компьютере с ботом и войди в ИТМО ID.") from None

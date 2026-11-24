@@ -125,6 +125,15 @@
       }catch{notify("Не удалось обновить статусы. Нажми «Проверить подключения» ещё раз.")}
     },1800);
   }
+  async function privateLogin(source){
+    if(demo){notify("Приватный вход доступен в личном чате с ботом.");return}
+    try{
+      const response=await fetch("/login/open/"+source,{method:"POST",headers:{"X-Telegram-Init-Data":initData}});
+      if(!response.ok)throw Error(response.status===429?"Закрой предыдущее окно входа и попробуй ещё раз.":"Открой вход из личного чата с ботом.");
+      const result=await response.json();
+      location.assign(result.viewer);
+    }catch(e){notify(e.message)}
+  }
   async function perform(action,p={},options={}){
     if(busy)return null;busy=true;main.setAttribute("aria-busy","true");
     try{
@@ -318,8 +327,8 @@
     case "bars-check":await perform("bars_check",{},{long:true,title:"Баллы БаРС"});break;
     case "week-report":await perform("week_report",{},{long:true,title:"Недельная сводка"});break;
     case "mail-check":await perform("mail_check",{},{message:s=>s.services.mail?.ok||s.services.isu?.ok?"Доступные входящие показаны в списке.":"Почтовое подключение не подтверждено. Открой профиль."});break;
-    case "isu-login":await perform("isu_login",{},{long:true,title:"Подключение входящих ИСУ"});break;
-    case "itmo-login":await perform("itmo_login",{},{long:true,title:"Вход в ИТМО ID"});break;
+    case "isu-login":await privateLogin("isu");break;
+    case "itmo-login":await privateLogin("itmo");break;
     case "select-day":selectedDay=el.dataset.date;render();break;
     case "task-filter":filter=value;render();break;
     case "open-task":filter="all";category="";expandedTask=id;go("tasks");break;
@@ -382,6 +391,8 @@
       tg=window.Telegram?.WebApp;initData=tg?.initData||"";tg?.ready();tg?.expand();
       if(!initData)throw Error("Для доступа к личным данным открой приложение кнопкой в чате со своим ботом.");
       state=normalize(await request("state",{}));render();watchCheck();
+      const login=new URLSearchParams(location.search).get("login");
+      if(["itmo","isu"].includes(login))await privateLogin(login);
     }catch(e){
       main.innerHTML=mast("Мой кампус","Личное приложение студента ИТМО")+`<section class="panel">${empty("Личный кабинет закрыт",e?.message||"Не удалось открыть приложение.",'<a class="btn minor" href="?demo=1">Посмотреть демоверсию</a>')}</section>`;
     }

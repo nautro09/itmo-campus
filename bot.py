@@ -3,7 +3,8 @@ import asyncio
 import hmac
 import json
 import os
-import secrets
+import hashlib
+from collections import deque
 import sqlite3
 import sys
 import time
@@ -76,8 +77,9 @@ class Bot:
         self.report_check = False
         self.api = None
         self.login_job = None
-        self.pair_code = secrets.token_urlsafe(8)
-        self.pair_attempts = {}
+        self.owner = store.get("owner")
+        self.starts = deque()
+        self.verifications = deque()
 
     def settings(self):
         st = self.s
@@ -98,19 +100,18 @@ class Bot:
         return self.plan.screen("settings", message, [[LOGIN,"🔑 Войти в ИСУ"], [CLOCK, toggle], [INTERVAL],
                               ["🚶 Дорога", "🗓 Сводка по воскресеньям"],["🌙 Тихие часы","⏰ Будильник"],["🔔 Уведомления"],["🔎 Проверить связь"]])
 
-    def begin_login(self, isu=False):
-        if isu:
-            if not self.isu_job or self.isu_job.done():
-                self.mail.signing_in = True
-                self.isu_job=asyncio.create_task(self.sign_into_inbox())
-            return "В окне Chromium на компьютере с ботом войди в ИСУ и открой «Сообщения → Входящие»."
-        if not self.login_job or self.login_job.done():
-            self.login_job = asyncio.create_task(self.sign_in())
-        return "На компьютере с ботом откроется окно ИТМО ID. Войди в аккаунт. После подключения придёт сообщение."
+    def login_button(self, isu=False):
+        origin = self.s.get("wake_origin") or os.getenv("MINI_APP_URL","").rstrip("/")
+        if not origin.startswith("https://"):
+            return "Публичный адрес Mini App ещё не готов.", [[BACK]]
+        source = "isu" if isu else "itmo"
+        button = {"text":"Открыть приватный вход","web_app":{"url":origin+"/?login="+source}}
+        return "Открой официальный сайт в приватном окне на этом устройстве. После входа сервер продолжит проверку круглосуточно.", [[button]]
 
-    async def sign_into_inbox(self):
+    async def sign_into_inbox(self, env):
+        self.mail.signing_in = True
         try:
-            await self.isu.login()
+            await self.isu.login(env)
             with self.s.db:
                 self.s.set("isu_connected",True)
             message = "Вход сохранён. Входящие будут проверяться автоматически."
@@ -176,10 +177,10 @@ class Bot:
                  f"Срок · {draft['due'] or 'нужно выбрать'}\nПодзадач · {len(draft['steps'])}")
         return self.plan.screen("draft",message,[["Сохранить черновик","Изменить срок"],["Изменить название","Изменить категорию"],[BACK]],draft=draft)
 
-    async def sign_in(self):
+    async def sign_in(self, env):
         self.monitor.signing_in = True
         try:
-            await self.portal.login()
+            await self.portal.login(env)
             with self.s.db:
                 self.s.set("connected", True)
                 self.s.set("last_attempt", 0)
@@ -215,7 +216,7 @@ class Bot:
                 await self.monitor.fetch(for_days=[datetime.now(MSK).date() + timedelta(days=i) for i in range(7)])
             return self.plan.screen("home",weekly_report(self.s,datetime.now(MSK).date()),MAIN)
         if text=="🔑 Войти в ИСУ":
-            return self.begin_login(True),self.s.get("keyboard",MAIN)
+            return self.login_button(True)
         if text==MAIL or (text==BACK and name=="mail_item"):
             rows=self.s.db.execute("SELECT id,subject FROM mail ORDER BY id DESC LIMIT 10").fetchall()
             buttons=[[f"✉ {r['id']} · {r['subject'][:36]}"] for r in rows]
@@ -372,7 +373,7 @@ class Bot:
             return self.settings()
         if text in (TODAY,TOMORROW):
             if not self.s.get("connected"):
-                return self.plan.screen("settings", "Подключи личное расписание. Окно для входа откроется на компьютере, где запущен бот.", [[LOGIN]])
+                return self.plan.screen("settings", "Подключи личное расписание. Открой приватный вход на своём устройстве.", [[LOGIN]])
             if self.monitor.signing_in:
                 return "Дождись окончания входа в окне ИТМО.", self.s.get("keyboard", MAIN)
             day = datetime.now(MSK).date() + timedelta(days=int(text == TOMORROW))
@@ -380,7 +381,7 @@ class Bot:
             return self.plan.screen("home", self.monitor.show_day(day), MAIN)
         if name == "settings":
             if text == LOGIN:
-                return self.begin_login(), self.s.get("keyboard",MAIN)
+                return self.login_button()
             if text == INTERVAL:
                 return self.plan.screen("interval", "Как часто проверять изменения на ближайшие 7 дней?",
                                         pairs(["1 мин", "5 мин", "15 мин", "30 мин", "Выключить проверки"])+[[BACK]])
@@ -406,35 +407,36 @@ class Bot:
 
     async def update(self, event):
         uid = event["update_id"]
-        if uid == self.s.get("last_update"):
-            return
         msg = event.get("message", {})
         chat = msg.get("chat", {})
-        text = (msg.get("text") or msg.get("caption") or "").strip()
         chat_id = chat.get("id")
-        if chat.get("type") == "private" and chat_id == msg.get("from",{}).get("id") and text:
-            owner = self.s.get("owner")
-            if not owner:
+        owner = self.owner
+        if not owner or chat.get("type") != "private" or chat_id != owner or msg.get("from",{}).get("id") != owner:
+            return
+        if uid == self.s.get("last_update"):
+            return
+        text = (msg.get("text") or msg.get("caption") or "").strip()
+        if text:
+            command = text.split(maxsplit=1)[0].lower()
+            if command in ("/start","/verify"):
+                attempts = self.verifications if command == "/verify" else self.starts
                 now = time.monotonic()
-                recent = [t for t in self.pair_attempts.get(chat_id,[]) if t > now-60]
-                if text in ("/start", PAIR):
-                    response = "Введи код привязки из терминала на компьютере с ботом.", [[PAIR]]
-                elif len(recent) >= 5:
-                    response = "Попробуй через минуту.", [[PAIR]]
-                elif hmac.compare_digest(text.encode(), self.pair_code.encode()):
-                    self.s.set("owner", chat_id)
-                    response = self.plan.home()
-                    response = ("Чат привязан. Открой «Настройки», чтобы подключить my.itmo.\n\n"+response[0], response[1])
-                else:
-                    self.pair_attempts[chat_id] = recent + [now]
-                    response = "Код не подошёл. Проверь код в терминале.", [[PAIR]]
-            elif owner == chat_id:
-                response = self.draft(text) if msg.get("forward_origin") else await self.route(text)
+                while attempts and attempts[0] <= now-60:
+                    attempts.popleft()
+                if len(attempts)>=3:
+                    return
+                attempts.append(now)
+            if command == "/verify":
+                digest = os.getenv("ADMIN_VERIFY_SHA256","")
+                value = text.partition(" ")[2].strip()
+                if msg.get("forward_origin") or not digest or not hmac.compare_digest(hashlib.sha256(value.encode()).hexdigest(),digest):
+                    return
+                response = ("Доступ владельца подтверждён. " + self.settings()[0], self.s.get("keyboard", MAIN))
             else:
-                response = None
+                response = self.draft(text) if msg.get("forward_origin") else await self.route(text)
             if response:
                 message, rows = response
-                if self.s.get("owner") == chat_id:
+                if rows and not isinstance(rows[0][0],dict):
                     self.s.set("keyboard",rows)
                 rubric = None
                 if owner == chat_id:
@@ -455,13 +457,14 @@ class Bot:
 
 
 async def poll(api, bot):
+    last = bot.s.get("last_update")
     while True:
         try:
-            last = bot.s.get("last_update")
             opts = dict(offset=last+1) if last is not None else {}
             updates = await api.call("getUpdates", timeout=20, allowed_updates=["message"], **opts)
             for update in updates:
                 await bot.update(update)
+                last = update["update_id"]
         except TelegramError as e:
             if e.code in (401,404,409):
                 raise
@@ -475,8 +478,9 @@ async def poll(api, bot):
 async def send_outbox_item(api, item):
     common = {"chat_id": item["chat"]}
     if item["keyboard"]:
-        common["reply_markup"] = {"keyboard": json.loads(item["keyboard"]), "resize_keyboard": True,
-                                  "is_persistent": True}
+        rows = json.loads(item["keyboard"])
+        common["reply_markup"] = ({"inline_keyboard":rows} if rows and isinstance(rows[0][0],dict) else
+                                  {"keyboard":rows,"resize_keyboard":True,"is_persistent":True})
     kind, text = item["rubric"], item["text"]
     if kind:
         for cover in ((True, False) if kind in COVERS else (False,)):
@@ -541,6 +545,7 @@ async def main():
         process_lock.execute("BEGIN EXCLUSIVE")
     except sqlite3.OperationalError:
         raise SystemExit("Бот уже запущен или его папка данных недоступна.")
+    load_dotenv(ENV.with_name("access.env"),interpolate=False)
     load_dotenv(ENV,interpolate=False)
     token = os.getenv("BOT_TOKEN","")
     if not token or ":" not in token or any(c.isspace() or c in "/?#" for c in token):
@@ -564,13 +569,14 @@ async def run_bot(data, api, token):
             raise SystemExit("Проверь OWNER_TELEGRAM_ID и владельца существующей базы.")
         with store.db:
             store.set("owner",int(configured))
+        bot.owner = int(configured)
     with store.db:
         store.set("telegram_status",{"ok":True,"detail":"Связь установлена при запуске."})
         store.set("wake_bot_username", me["username"])
     runner=await start_web(bot,token)
     print(f"Бот запущен: https://t.me/{me['username']}", flush=True)
     if not store.get("owner"):
-        print(f"Код привязки для первого входа: {bot.pair_code}", flush=True)
+        print("Доступ закрыт. Укажи OWNER_TELEGRAM_ID в приватном окружении.", flush=True)
     workers = [asyncio.create_task(job) for job in (poll(api, bot), deliver(api, store),
                clock(bot.monitor), bot.mail.run(), bot.grades.run(), serve_menu(api, store))]
     try:

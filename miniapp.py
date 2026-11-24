@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl
 
 from aiohttp import web
 import wake
+from private_login import PrivateLogin, viewer_policy
 from extras import campus_names, draft_task, weekly_report
 from itmo import MSK
 from planner import REMIND
@@ -164,7 +165,7 @@ async def action(bot, kind, data):
         with s.db:
             save_settings(s,data)
     elif kind in ("itmo_login","isu_login"):
-        notice=bot.begin_login(kind=="isu_login")
+        notice="Обнови Mini App и открой приватное окно входа."
     elif kind == "check_services":
         notice = bot.start_check()
     elif kind in ("mail_check","refresh"):
@@ -200,6 +201,8 @@ def application(bot,token):
         response=await handler(request)
         response.headers.update({"Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer",
                                  "Content-Security-Policy":"default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'"})
+        if request.path.startswith("/viewer/") and policy:
+            response.headers["Content-Security-Policy"]=policy
         return response
     app=web.Application(client_max_size=64*1024,middlewares=[headers])
     async def asset(request):
@@ -219,6 +222,9 @@ def application(bot,token):
             return web.json_response(result)
         except (ValueError,KeyError,TypeError,OverflowError):
             return web.json_response({"error":"Проверь поля или обнови страницу и повтори действие."},status=400)
+    login=PrivateLogin(bot,lambda r: authorized(r.headers.get("X-Telegram-Init-Data",""),token,bot.s.get("owner")))
+    policy=viewer_policy() if login.available else ""
+    login.register(app)
     wake.register(app,bot.s)
     app.router.add_get("/pair",asset)
     app.router.add_get("/",asset)

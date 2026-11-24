@@ -28,4 +28,9 @@ sshpass -e scp "${options[@]}" -P "$SSH_PORT" \
     dist/image.tar.gz dist/image.ref deploy/compose.production.yaml deploy/compose.gateway.yaml \
     deploy/release.sh deploy/prepare.sh deploy/setup-gateway.sh deploy/app.env.example "$target:$remote/"
 sshpass -e scp "${options[@]}" -P "$SSH_PORT" -r deploy/gateway "$target:$remote/"
+if [[ -n ${CAMPUS_OWNER_ID:-} || -n ${ADMIN_VERIFY_SHA256:-} ]]; then
+    [[ ${CAMPUS_OWNER_ID:-} =~ ^[1-9][0-9]{0,18}$ && ${ADMIN_VERIFY_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || exit 1
+    printf 'OWNER_TELEGRAM_ID=%s\nADMIN_VERIFY_SHA256=%s\n' "$CAMPUS_OWNER_ID" "$ADMIN_VERIFY_SHA256" |
+        sshpass -e ssh "${options[@]}" -p "$SSH_PORT" "$target" "umask 077; cat > '$remote/access.env'"
+fi
 sshpass -e ssh "${options[@]}" -p "$SSH_PORT" "$target" "bash '$remote/release.sh' '$GITHUB_SHA'"

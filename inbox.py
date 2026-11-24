@@ -50,10 +50,10 @@ class IsuInbox:
                 await self.engine.stop()
                 self.engine = None
 
-    async def open(self, interactive):
+    async def open(self, interactive, env=None):
         self.engine = await async_playwright().start()
         self.context = await self.engine.chromium.launch_persistent_context(
-            str(self.profile),headless=not interactive,locale="ru-RU",timezone_id="Europe/Moscow")
+            str(self.profile),env=env, headless=not interactive,locale="ru-RU",timezone_id="Europe/Moscow")
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
         self.context.set_default_navigation_timeout(12000)
         target = ISU
@@ -128,11 +128,11 @@ class IsuInbox:
                 await asyncio.sleep(0.4)
         raise SourceError("Сеанс ИСУ не подтверждён. Нажми «Войти в ИСУ» и открой «Сообщения → Входящие».")
 
-    async def login(self):
+    async def login(self, env=None):
         async with self.lock:
             await self.close()
             try:
-                await self.open(True)
+                await self.open(True,env=env)
                 await self.reach_inbox(True)
                 await self.save_session()
             except BrowserError:
