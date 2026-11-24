@@ -132,7 +132,7 @@ class CampusTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(res.status,403)
             for path in ("/.env","/data/planner.sqlite3","/bot.py"):
                 self.assertEqual((await client.get(path)).status,404)
-            for path in ("/","/app.js","/app.css"):
+            for path in ("/","/app.js","/app.css","/login.html","/login.css"):
                 self.assertEqual((await client.get(path)).status,200)
             auth={"X-Telegram-Init-Data":signed(123,testtoken,int(time.time()))}
             res=await client.post("/api/action",headers=auth,json={"action":"settings","theme":"mint","campus_minutes":{"A":25}})

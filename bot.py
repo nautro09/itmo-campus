@@ -71,12 +71,10 @@ class Bot:
         self.portal = portal
         self.isu = IsuInbox(ROOT/"data"/"isu-browser")
         self.mail = Mail(store,self.isu)
-        self.isu_job = None
         self.check_job = None
         self.mail_check_job = None
         self.report_check = False
         self.api = None
-        self.login_job = None
         self.owner = store.get("owner")
         self.starts = deque()
         self.verifications = deque()
@@ -97,7 +95,7 @@ class Bot:
         if st.get("source_error"):
             message += "\n\n" + st.get("source_error")
         toggle = "Выключить рассылку" if on else "Включить рассылку"
-        return self.plan.screen("settings", message, [[LOGIN,"🔑 Войти в ИСУ"], [CLOCK, toggle], [INTERVAL],
+        return self.plan.screen("settings", message, [[LOGIN,"🔑 Войти в ИСУ"], *([["Войти в Microsoft 365"]] if os.getenv("MS_CLIENT_ID") else []), [CLOCK, toggle], [INTERVAL],
                               ["🚶 Дорога", "🗓 Сводка по воскресеньям"],["🌙 Тихие часы","⏰ Будильник"],["🔔 Уведомления"],["🔎 Проверить связь"]])
 
     def login_button(self, isu=False):
@@ -192,7 +190,7 @@ class Bot:
         except Exception as e:
             print("Ошибка подключения:", type(e).__name__, file=sys.stderr)
             with self.s.db:
-                self.s.post(self.s.get("owner"), "Не удалось открыть окно входа. Проверь установку Chromium на компьютере с ботом.")
+                self.s.post(self.s.get("owner"), "Не удалось открыть окно входа. Открой вход ещё раз из профиля Пары.")
         finally:
             self.monitor.signing_in = False
 
@@ -215,6 +213,8 @@ class Bot:
             if self.s.get("connected") and not self.monitor.signing_in:
                 await self.monitor.fetch(for_days=[datetime.now(MSK).date() + timedelta(days=i) for i in range(7)])
             return self.plan.screen("home",weekly_report(self.s,datetime.now(MSK).date()),MAIN)
+        if text=="Войти в Microsoft 365":
+            return await self.mail.link_outlook(),self.s.get("keyboard",MAIN)
         if text=="🔑 Войти в ИСУ":
             return self.login_button(True)
         if text==MAIL or (text==BACK and name=="mail_item"):
@@ -479,7 +479,7 @@ async def send_outbox_item(api, item):
     common = {"chat_id": item["chat"]}
     if item["keyboard"]:
         rows = json.loads(item["keyboard"])
-        common["reply_markup"] = ({"inline_keyboard":rows} if rows and isinstance(rows[0][0],dict) else
+        common["reply_markup"] = ({"inline_keyboard":rows} if rows and rows[0] and isinstance(rows[0][0],dict) else
                                   {"keyboard":rows,"resize_keyboard":True,"is_persistent":True})
     kind, text = item["rubric"], item["text"]
     if kind:
@@ -582,7 +582,7 @@ async def run_bot(data, api, token):
     try:
         await asyncio.gather(*workers)
     finally:
-        jobs = workers + [job for job in (bot.login_job, bot.isu_job, bot.mail_check_job, bot.check_job) if job]
+        jobs = workers + [job for job in (bot.mail.oauth_job, bot.mail_check_job, bot.check_job) if job]
         for job in jobs:
             job.cancel()
         await asyncio.gather(*jobs, return_exceptions=True)

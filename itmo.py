@@ -202,7 +202,7 @@ class Portal:
                 await self.open(headed=True,env=env)
                 await self.authorized_week(datetime.now(MSK).date(), interactive=True)
             except BrowserError:
-                raise SourceError("Вход не завершён. Открой окно Chromium на компьютере с ботом и войди в ИТМО ID.") from None
+                raise SourceError("Вход не завершён. Открой окно входа через кнопку в личном чате и войди в ИТМО ID.") from None
             finally:
                 await self.close()
 

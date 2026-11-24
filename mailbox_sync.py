@@ -186,6 +186,54 @@ class Mail:
         self.lock = asyncio.Lock()
         self.last = 0
         self.signing_in = False
+        self.oauth_job = None
+        self.oauth_lock = asyncio.Lock()
+        self.oauth_prompt = ""
+
+    async def link_outlook(self):
+        if not (os.getenv("MS_CLIENT_ID") and self.imap.host and self.imap.user):
+            return "Для Microsoft 365 настрой MS_CLIENT_ID, IMAP_HOST и IMAP_USER в приватном окружении сервера."
+        async with self.oauth_lock:
+            if self.oauth_job and not self.oauth_job.done():
+                return self.oauth_prompt
+            try:
+                auth = await asyncio.to_thread(microsoft,"devicecode",{"scope":SCOPE})
+                code = auth["user_code"]
+                if not re.fullmatch(r"[A-Za-z0-9-]{4,20}", code):
+                    raise ValueError()
+                self.oauth_prompt = f"Открой https://microsoft.com/devicelogin на своём устройстве и введи код {code}."
+                self.oauth_job = asyncio.create_task(self.finish_outlook(auth))
+                return self.oauth_prompt
+            except (OSError,ValueError,KeyError,SourceError):
+                return "Microsoft не выдал код. Проверь регистрацию приложения и разрешение IMAP."
+
+    async def finish_outlook(self, auth):
+        message = "Вход в Microsoft завершился без подтверждения. Запроси новый код."
+        try:
+            pause = max(5,auth.get("interval",5))
+            until = time.monotonic()+auth["expires_in"]
+            while time.monotonic()+pause < until:
+                await asyncio.sleep(pause)
+                result=await asyncio.to_thread(microsoft,"token",{"device_code":auth["device_code"],
+                    "grant_type":"urn:ietf:params:oauth:grant-type:device_code"})
+                if result.get("refresh_token"):
+                    async with self.lock:
+                        await asyncio.to_thread(save_refresh,result["refresh_token"])
+                        self.imap.access=""
+                        self.imap.expires=0
+                        self.last=0
+                    message="Вход в Microsoft 365 сохранён. Проверяю почту."
+                    break
+                if result.get("error")=="slow_down":
+                    pause+=5
+                elif result.get("error")!="authorization_pending":
+                    break
+        except (OSError,KeyError,ValueError,SourceError):
+            message="Проверка входа Microsoft прервана. Запроси новый код."
+        finally:
+            self.oauth_prompt=""
+        with self.s.db:
+            self.s.post(self.s.get("owner"),message)
 
     def record(self, src, messages, notify):
         for x in messages:

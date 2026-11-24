@@ -89,8 +89,8 @@
     case "step_delete":task.steps=task.steps.filter(x=>!idsame(x.id,p.id));break;
     case "settings":Object.assign(state.settings,p);break;
     case "week_report":notice=buildReport();break;
-    case "isu_login":notice="В подключённом боте откроется официальный экран входа в ИСУ на компьютере с ботом. В демоверсии используется тестовый ящик.";break;
-    case "itmo_login":notice="В демонстрационном режиме используется вымышленный профиль. В подключённом боте откроется окно официального входа в ИТМО ID на компьютере с ботом.";break;
+    case "isu_login":notice="В подключённом боте откроется официальный экран входа в ИСУ в приватном окне на твоём устройстве. В демоверсии используется тестовый ящик.";break;
+    case "itmo_login":notice="В демонстрационном режиме используется вымышленный профиль. В подключённом боте откроется окно официального входа в ИТМО ID в приватном окне на твоём устройстве.";break;
     case "refresh":notice="Демонстрационное расписание обновлено.";break;
     case "bars_check":notice="Физика · 42 балла (демопример)";break;
     case "mail_check":notice="Демонстрационный ящик проверен.";break;
@@ -280,7 +280,7 @@
       ["wake","Будильник и дорога",`${switchSetting("wake_on","Связать подъём с расписанием",state.wake_status||"Телефон не привязан")}${[["wake_prep","Сборы перед очной парой",40],["wake_online","Подъём до онлайн-пары",20]].map(([key,label,n])=>`<label class="setting"><span><b>${label}</b><small>В минутах</small></span><input type="number" min="0" max="240" required data-setting="${key}" value="${esc(s[key]??n)}"></label>`).join("")}${btn("wake-rules","Время по парам","clock","minor")}<div class="btn-row">${btn("wake-pair","Привязать будильник телефона к расписанию","clock","minor")}${btn("wake-revoke","Отозвать доступ","close","minor")}</div>${switchSetting("wake_free_off","В свободный день предложить выключить первый будильник")}${switchSetting("travel_on","Пора выходить","Напоминание перед первой очной парой.")}<label class="setting"><span><b>Общее время дороги</b><small>В минутах, для всех корпусов</small></span><input min="1" max="240" step="1" type="number" data-setting="travel_minutes" value="${esc(s.travel_minutes??35)}" required></label>${campusFields()}`],
       ["alerts","Уведомления",`${switchSetting("quiet_on","Тихие часы","Фоновые уведомления придут сводкой в конце интервала по Москве.")}${[["quiet_start","Начало тишины","23:00"],["quiet_end","Конец тишины","07:00"]].map(([key,label,fallback])=>`<label class="setting"><b>${label}</b><input type="time" data-setting="${key}" value="${esc(s[key]||fallback)}" required></label>`).join("")}${switchSetting("quiet_first","Изменения первой пары сразу")}${switchSetting("morning_on","Утреннее расписание")}<label class="setting"><span><b>Время рассылки</b><small>По Москве</small></span><input data-setting="morning_time" type="time" required value="${esc(s.morning_time||"07:30")}"></label>${switchSetting("weekly_on","Недельная сводка")}${switchSetting("mail_on","Пересылка почты")}
         ${[["notify_isu","Входящие ИСУ"],["notify_imap","Входящие IMAP"],["notify_bars","Изменения баллов БаРС"],["notify_schedule","Переносы и отмены занятий"],["notify_due","Дедлайны"]].map(([k,v])=>switchSetting(k,v)).join("")}`],
-      ["accounts","Аккаунты и синхронизация",`<div class="service-list">${status}</div><div class="btn-row">${btn("check-services","Проверить связь","refresh","minor")}${btn("itmo-login","Войти в my.itmo","compass","minor")}${btn("isu-login","Войти в ИСУ","mail","minor")}</div><label class="setting"><span><b>Проверять изменения</b><small>На ближайшие семь дней</small></span><select data-setting="interval">${interval}</select></label>`],
+      ["accounts","Аккаунты и синхронизация",`<div class="service-list">${status}</div><div class="btn-row">${btn("check-services","Проверить связь","refresh","minor")}${btn("itmo-login","Войти в my.itmo","compass","minor")}${btn("isu-login","Войти в ИСУ","mail","minor")}${state.outlook_available?btn("outlook-login","Войти в Microsoft 365","mail","minor"):""}</div><label class="setting"><span><b>Проверять изменения</b><small>На ближайшие семь дней</small></span><select data-setting="interval">${interval}</select></label>`],
       ["themes","Оформление",`<div class="themes">${variants}</div>`]
     ];
     const active=groups.find(([id])=>id===profilePage)||groups[0];
@@ -327,6 +327,7 @@
     case "bars-check":await perform("bars_check",{},{long:true,title:"Баллы БаРС"});break;
     case "week-report":await perform("week_report",{},{long:true,title:"Недельная сводка"});break;
     case "mail-check":await perform("mail_check",{},{message:s=>s.services.mail?.ok||s.services.isu?.ok?"Доступные входящие показаны в списке.":"Почтовое подключение не подтверждено. Открой профиль."});break;
+    case "outlook-login":{const r=await perform("outlook_login");if(r?.notice)modal("Microsoft 365",`<p>${esc(r.notice)}</p><a class="btn primary" href="https://microsoft.com/devicelogin" target="_blank" rel="noreferrer">Открыть Microsoft</a>`);break}
     case "isu-login":await privateLogin("isu");break;
     case "itmo-login":await privateLogin("itmo");break;
     case "select-day":selectedDay=el.dataset.date;render();break;

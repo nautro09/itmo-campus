@@ -69,7 +69,8 @@ async def display():
                 await asyncio.sleep(.05)
             reader, writer = await asyncio.open_unix_connection(sock)
             try:
-                yield {**os.environ, "DISPLAY":name, "XAUTHORITY":str(authority)}, reader, writer
+                env = {k:os.environ[k] for k in ("PATH","HOME","LANG","TZ","LD_LIBRARY_PATH") if k in os.environ}
+                yield {**env, "DISPLAY":name, "XAUTHORITY":str(authority)}, reader, writer
             finally:
                 writer.close()
                 await writer.wait_closed()
@@ -99,8 +100,10 @@ class PrivateLogin:
         self.last = now
         key = secrets.token_urlsafe(32)
         self.ticket = (key, now+45, source)
-        response = web.json_response({"viewer":"/viewer/vnc.html?autoconnect=true&resize=scale&path=login%2Fsocket"})
-        response.set_cookie("__Secure-para-login",key,max_age=45,path="/login/socket",httponly=True,secure=True,samesite="None")
+        response = web.json_response({"viewer":"/login.html"})
+        # Partition by the embedding site so Telegram Web works with third-party cookies blocked.
+        response.headers.add("Set-Cookie", f"__Secure-para-login={key}; Max-Age=45; Path=/login/socket; "
+                             "HttpOnly; Secure; SameSite=None; Partitioned")
         return response
 
     async def socket(self, request):

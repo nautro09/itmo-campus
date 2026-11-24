@@ -1,13 +1,14 @@
 import asyncio
 import os
+import time
 from unittest import IsolatedAsyncioTestCase, skipUnless
 from unittest.mock import Mock
 
-from aiohttp import web
 from aiohttp.test_utils import TestServer
 from playwright.async_api import async_playwright
 
-from private_login import PrivateLogin, viewer_policy
+from miniapp import application
+from test_campus import signed
 
 
 @skipUnless(os.getenv("TEST_ISU_BROWSER")=="1", "requires production image")
@@ -27,20 +28,10 @@ class Viewer(IsolatedAsyncioTestCase):
                 stopped.set()
         bot=Mock()
         bot.sign_in=fixture
-        login=PrivateLogin(bot,lambda r:r.headers.get("X-Test-Owner")=="owner")
-        self.assertTrue(login.available)
-        policy=viewer_policy()
-        @web.middleware
-        async def headers(req,handler):
-            res=await handler(req)
-            if req.path.startswith("/viewer/"):
-                res.headers["Content-Security-Policy"]=policy
-            return res
-        app=web.Application(middlewares=[headers])
-        login.register(app)
+        app=application(bot,"fixture")
         async with TestServer(app) as server, async_playwright() as p:
             host=str(server.make_url("/")).rstrip("/")
-            bot.s.get.return_value=host
+            bot.s.get.side_effect=lambda key: 123 if key=="owner" else host
             browser=await p.chromium.launch()
             context=await browser.new_context()
             page=await context.new_page()
@@ -48,11 +39,11 @@ class Viewer(IsolatedAsyncioTestCase):
             self.assertEqual(result.status,403)
             result=await context.request.get(host+"/login/socket")
             self.assertEqual(result.status,403)
-            result=await context.request.post(host+"/login/open/itmo",headers={"X-Test-Owner":"owner"})
+            result=await context.request.post(host+"/login/open/itmo",headers={"X-Telegram-Init-Data":signed(123,"fixture",int(time.time()))})
             self.assertEqual(result.status,200)
             await page.goto(host+(await result.json())["viewer"])
             try:
-                await page.wait_for_selector("html.noVNC_connected",state="attached",timeout=20000)
+                await page.frame_locator("iframe").locator("html.noVNC_connected").wait_for(state="attached",timeout=20000)
             except Exception:
                 self.fail("viewer failed: "+(await page.locator("body").inner_text())[:800])
             await asyncio.wait_for(opened.wait(),10)

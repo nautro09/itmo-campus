@@ -62,7 +62,7 @@ def state(bot):
     stale = bool(s.get("source_error"))
     latest = set(s.get("latest_dates", []))
     pending = bot.check_job is not None and not bot.check_job.done()
-    return dict(wake_preview=wake.proposal(s,now),wake_status=wake.status(s), campuses=campus_names(s,cache), bars=bot.grades.report(), check_pending=pending, today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
+    return dict(outlook_available=bool(os.getenv("MS_CLIENT_ID")),wake_preview=wake.proposal(s,now),wake_status=wake.status(s), campuses=campus_names(s,cache), bars=bot.grades.report(), check_pending=pending, today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
                 settings={k:s.get(k,v) for k,v in DEFAULTS.items()},services=statuses,
                 days=[dict(date=d,lessons=item["lessons"],checked=item["checked"],stale=bool(stale or d not in latest or item["checked"][:10]!=now.date().isoformat())) for d,item in sorted(cache.items()) if d>=now.date().isoformat()],
                 tasks=tasks,categories=[r[0] for r in s.db.execute("SELECT name FROM categories ORDER BY name")],
@@ -161,6 +161,8 @@ async def action(bot, kind, data):
     if kind in {"task_save","task_done","task_delete","step_add","step_done","step_delete"}:
         with s.db:
             change_task(s.db,kind,data)
+    elif kind=="outlook_login":
+        notice=await bot.mail.link_outlook()
     elif kind=="settings":
         with s.db:
             save_settings(s,data)
@@ -228,7 +230,7 @@ def application(bot,token):
     wake.register(app,bot.s)
     app.router.add_get("/pair",asset)
     app.router.add_get("/",asset)
-    app.router.add_get("/{asset:index\\.html|app\\.js|app\\.css|qr\\.js|pair\\.js}",asset)
+    app.router.add_get("/{asset:index\\.html|app\\.js|app\\.css|qr\\.js|pair\\.js|login\\.html|login\\.css}",asset)
     app.router.add_post("/api/services",api)
     app.router.add_post("/api/state",api)
     app.router.add_post("/api/action",api)
