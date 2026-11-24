@@ -230,7 +230,7 @@ def application(bot,token):
     wake.register(app,bot.s)
     app.router.add_get("/pair",asset)
     app.router.add_get("/",asset)
-    app.router.add_get("/{asset:index\\.html|app\\.js|app\\.css|qr\\.js|pair\\.js|login\\.html|login\\.css}",asset)
+    app.router.add_get("/{asset:index\\.html|app\\.js|app\\.css|qr\\.js|pair\\.js|login\\.html|login\\.css|telegram-web-app\\.js}",asset)
     app.router.add_post("/api/services",api)
     app.router.add_post("/api/state",api)
     app.router.add_post("/api/action",api)

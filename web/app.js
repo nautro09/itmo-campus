@@ -387,7 +387,7 @@
     shell();
     try{
       if(!window.Telegram?.WebApp){
-        await new Promise((resolve,reject)=>{const script=document.createElement("script");script.src="https://telegram.org/js/telegram-web-app.js";script.onload=resolve;script.onerror=()=>reject(Error("Не удалось загрузить модуль Telegram."));document.head.append(script)});
+        await new Promise((resolve,reject)=>{const script=document.createElement("script");script.src="/telegram-web-app.js";script.onload=resolve;script.onerror=()=>reject(Error("Не удалось загрузить модуль Telegram."));document.head.append(script)});
       }
       tg=window.Telegram?.WebApp;initData=tg?.initData||"";tg?.ready();tg?.expand();
       if(!initData)throw Error("Для доступа к личным данным открой приложение кнопкой в чате со своим ботом.");
