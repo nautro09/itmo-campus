@@ -3,12 +3,15 @@ services:
     build: .
     image: itmo-campus:local
     init: true
+    hostname: itmo-campus-bot
+    stop_signal: SIGINT
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
     user: "${CAMPUS_UID:-1000}:${CAMPUS_GID:-1000}"
     shm_size: 1gb
     environment:
+      CAMPUS_LOCAL_PROFILE_VOLUME: "1"
       WEB_HOST: 0.0.0.0
       WEB_PORT: "8787"
       CAMPUS_ENV_FILE: /app/.private/.env

@@ -3,6 +3,8 @@ services:
   bot:
     image: ${CAMPUS_IMAGE:?Set CAMPUS_IMAGE to the tested release image}
     init: true
+    hostname: itmo-campus-bot
+    stop_signal: SIGINT
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
@@ -10,6 +12,7 @@ services:
     shm_size: 1gb
     stop_grace_period: 30s
     environment:
+      CAMPUS_LOCAL_PROFILE_VOLUME: "1"
       WEB_HOST: 0.0.0.0
       WEB_PORT: "8787"
       CAMPUS_ENV_FILE: /app/.private/.env

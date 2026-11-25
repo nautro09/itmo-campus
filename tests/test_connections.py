@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from bot import Bot
+from bot import Bot, recover_container_profiles
 from inbox import IsuInbox, ISU
 from menu import register_menu
 from miniapp import action
@@ -15,6 +15,28 @@ from store import Store
 
 
 class ConnectionTests(unittest.IsolatedAsyncioTestCase):
+    def test_recover_only_abandoned_foreign_browser_lock(self):
+        with tempfile.TemporaryDirectory() as temp, patch("bot.socket.gethostname", return_value="campus"):
+            data = Path(temp)
+            profile = data / "my-itmo-browser"
+            profile.mkdir()
+            cookies = profile / "Cookies"
+            cookies.write_bytes(b"saved session")
+            lock = profile / "SingletonLock"
+            lock.symlink_to("old-container-123")
+            endpoint = data / "endpoint"
+            endpoint.touch()
+            (profile / "SingletonSocket").symlink_to(endpoint)
+            recover_container_profiles(data)
+            self.assertTrue(lock.is_symlink())
+            endpoint.unlink()
+            recover_container_profiles(data)
+            self.assertFalse(lock.is_symlink())
+            lock.symlink_to("campus-456")
+            recover_container_profiles(data)
+            self.assertTrue(lock.is_symlink())
+            self.assertEqual(cookies.read_bytes(), b"saved session")
+
     async def test_menu_applies_to_existing_chat(self):
         api = AsyncMock()
         await register_menu(api, "https://campus.example", 123)

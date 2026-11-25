@@ -6,6 +6,7 @@ import os
 import hashlib
 from collections import deque
 import sqlite3
+import socket
 import sys
 import time
 from datetime import datetime, timedelta
@@ -535,6 +536,26 @@ async def clock(monitor):
         await asyncio.sleep(3)
 
 
+def recover_container_profiles(data):
+    """Called with the exclusive instance lock on the bot's local Docker volume."""
+    hostname = socket.gethostname()
+    for name in ("my-itmo-browser", "isu-browser"):
+        profile = data / name
+        lock = profile / "SingletonLock"
+        if profile.is_symlink() or not lock.is_symlink():
+            continue
+        target = os.readlink(lock)
+        previous, _, pid = target.rpartition("-")
+        if previous == hostname or not re.fullmatch(r"[A-Za-z0-9_.-]+", previous) or not pid.isdecimal():
+            continue
+        # A reachable local socket can belong to a live browser. Leave its lock alone.
+        try:
+            (profile / "SingletonSocket").stat()
+        except FileNotFoundError:
+            lock.unlink()
+            print(f"Снята устаревшая блокировка Chromium: {name}.", flush=True)
+
+
 async def main():
     os.umask(0o077)
     data = ROOT / "data"
@@ -545,6 +566,8 @@ async def main():
         process_lock.execute("BEGIN EXCLUSIVE")
     except sqlite3.OperationalError:
         raise SystemExit("Бот уже запущен или его папка данных недоступна.")
+    if os.getenv("CAMPUS_LOCAL_PROFILE_VOLUME") == "1":
+        recover_container_profiles(data)
     load_dotenv(ENV.with_name("access.env"),interpolate=False)
     load_dotenv(ENV,interpolate=False)
     token = os.getenv("BOT_TOKEN","")
