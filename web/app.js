@@ -125,11 +125,18 @@
       }catch{notify("Не удалось обновить статусы. Нажми «Проверить подключения» ещё раз.")}
     },1800);
   }
-  async function privateLogin(source){
+  async function privateLogin(source,previous){
     if(demo){notify("Приватный вход доступен в личном чате с ботом.");return}
     try{
-      const response=await fetch("/login/open/"+source,{method:"POST",headers:{"X-Telegram-Init-Data":initData}});
-      if(!response.ok)throw Error(response.status===429?"Закрой предыдущее окно входа и попробуй ещё раз.":"Открой вход из личного чата с ботом.");
+      const headers={"X-Telegram-Init-Data":initData};
+      if(previous)headers["X-Replace-Login"]=previous;
+      const response=await fetch("/login/open/"+source,{method:"POST",headers});
+      if(response.status===409){
+        const {window:previousWindow}=await response.json();
+        modal("Уже открыто окно входа", `<p>Можно продолжить в прежнем окне или закрыть его и начать вход здесь.</p><div class="btn-row">${btn("resume-login","Закрыть прежнее и войти здесь",null,"primary",{value:source,id:previousWindow})}${btn("close-modal","Оставить прежнее",null)}</div>`);
+        return;
+      }
+      if(!response.ok)throw Error(response.status===429?"Повтори через несколько секунд.":response.status===503?"Окно входа пока недоступно. Попробуй ещё раз.":"Открой вход из личного чата с ботом.");
       const result=await response.json();
       location.assign(result.viewer);
     }catch(e){notify(e.message)}
@@ -328,6 +335,7 @@
     case "week-report":await perform("week_report",{},{long:true,title:"Недельная сводка"});break;
     case "mail-check":await perform("mail_check",{},{message:s=>s.services.mail?.ok||s.services.isu?.ok?"Доступные входящие показаны в списке.":"Почтовое подключение не подтверждено. Открой профиль."});break;
     case "outlook-login":{const r=await perform("outlook_login");if(r?.notice)modal("Microsoft 365",`<p>${esc(r.notice)}</p><a class="btn primary" href="https://microsoft.com/devicelogin" target="_blank" rel="noreferrer">Открыть Microsoft</a>`);break}
+    case "resume-login":dialog.close();await privateLogin(value,id);break;
     case "isu-login":await privateLogin("isu");break;
     case "itmo-login":await privateLogin("itmo");break;
     case "select-day":selectedDay=el.dataset.date;render();break;

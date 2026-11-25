@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
 from aiohttp import web, WSMsgType
@@ -89,11 +90,18 @@ async def display():
             await proc.wait()
 
 
+@dataclass
+class LoginWindow:
+    identity: str = field(default_factory=lambda: secrets.token_hex(16))
+    stop: asyncio.Event = field(default_factory=asyncio.Event)
+    closed: asyncio.Event = field(default_factory=asyncio.Event)
+
+
 class PrivateLogin:
     def __init__(self, bot, authorize):
         self.bot, self.authorize = bot, authorize
         self.ticket = None
-        self.active = False
+        self.active = None
         self.last = -100.
         self.available = (ASSETS / "vnc.html").is_file() and bool(shutil.which("Xtigervnc"))
 
@@ -104,11 +112,23 @@ class PrivateLogin:
         if not self.available:
             raise web.HTTPServiceUnavailable(text="Приватный вход доступен в серверной версии Docker.")
         now = time.monotonic()
-        if self.active or now-self.last < 3:
-            raise web.HTTPTooManyRequests(text="Окно уже открыто или только что запрошено.")
-        self.last = now
+        if now-self.last < 3:
+            raise web.HTTPTooManyRequests(text="Повтори через несколько секунд.")
+        window = self.active
+        if window:
+            if request.headers.get("X-Replace-Login") != window.identity:
+                return web.json_response({"window": window.identity}, status=409)
+            self.last = now
+            window.stop.set()
+            try:
+                await asyncio.wait_for(window.closed.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                raise web.HTTPServiceUnavailable(text="Предыдущее окно ещё закрывается.")
+            if self.active or self.ticket:
+                raise web.HTTPTooManyRequests(text="Уже запрошено новое окно.")
+        self.last = time.monotonic()
         key = secrets.token_urlsafe(32)
-        self.ticket = (key, now+45, source)
+        self.ticket = (key, self.last+45, source)
         response = web.json_response({"viewer":"/login.html"})
         # Partition by the embedding site so Telegram Web works with third-party cookies blocked.
         response.headers.add("Set-Cookie", f"__Secure-para-login={key}; Max-Age=45; Path=/login/socket; "
@@ -127,18 +147,19 @@ class PrivateLogin:
         if not ws.can_prepare(request).ok:
             raise web.HTTPBadRequest()
         self.ticket=None
-        self.active=True
+        window = self.active = LoginWindow()
         try:
             await ws.prepare(request)
-            await asyncio.wait_for(self.session(ws,source),timeout=420)
+            await asyncio.wait_for(self.session(ws,source,window),timeout=420)
         except (ConnectionError,RuntimeError,asyncio.TimeoutError,OSError):
             pass
         finally:
-            self.active=False
+            self.active = None
+            window.closed.set()
             await ws.close()
         return ws
 
-    async def session(self, ws, source):
+    async def session(self, ws, source, window):
         async with display() as (env, reader, writer):
             async def output():
                 while chunk := await reader.read(65536):
@@ -150,7 +171,7 @@ class PrivateLogin:
                     writer.write(message.data)
                     await writer.drain()
             login=self.bot.sign_into_inbox if source=="isu" else self.bot.sign_in
-            tasks=[asyncio.create_task(f) for f in (output(),inputs(),login(env))]
+            tasks=[asyncio.create_task(f) for f in (output(),inputs(),login(env),window.stop.wait())]
             try:
                 done,_=await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED)
                 for task in done:

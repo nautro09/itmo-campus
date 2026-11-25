@@ -47,6 +47,17 @@ class Viewer(IsolatedAsyncioTestCase):
             except Exception:
                 self.fail("viewer failed: "+(await page.locator("body").inner_text())[:800])
             await asyncio.wait_for(opened.wait(),10)
-            await page.close()
+            headers={"X-Telegram-Init-Data":signed(123,"fixture",int(time.time()))}
+            # The normal issue rate is three seconds per owner.
+            await asyncio.sleep(3)
+            conflict=await context.request.post(host+"/login/open/isu",headers=headers)
+            self.assertEqual(conflict.status,409)
+            replacement={"X-Replace-Login":(await conflict.json())["window"]}
+            forbidden=await context.request.post(host+"/login/open/isu",headers=replacement)
+            self.assertEqual(forbidden.status,403)
+            self.assertFalse(stopped.is_set())
+            result=await context.request.post(host+"/login/open/isu",headers={**headers,**replacement})
+            self.assertEqual(result.status,200)
             await asyncio.wait_for(stopped.wait(),10)
+            await page.close()
             await browser.close()
