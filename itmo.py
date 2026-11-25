@@ -1,5 +1,6 @@
 """Personal timetable from the signed-in my.itmo portal."""
 import asyncio
+import re
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from urllib.parse import urlsplit
@@ -30,6 +31,24 @@ class SourceError(Exception):
 
 class LoginNeeded(SourceError):
     pass
+
+
+def login_browser_error(error, service, browser_started):
+    # Browser exceptions may contain redirect URLs with tokens and account identifiers.
+    diagnostic = str(error)
+    network = re.search(r"\bnet::(ERR_[A-Z0-9_]{1,64})\b", diagnostic)
+    if network:
+        return SourceError(f"Браузер сервера не смог открыть {service}. Сетевая ошибка: {network[1]}.")
+    if "SingletonLock" in diagnostic or "ProcessSingleton" in diagnostic:
+        return SourceError(f"Браузер сервера не смог открыть профиль {service}: профиль заблокирован.")
+    if "Permission denied" in diagnostic or "EACCES" in diagnostic:
+        return SourceError(f"Браузеру сервера не хватает прав для открытия {service}.")
+    if "No space left" in diagnostic:
+        return SourceError("На сервере закончилось место для профиля браузера.")
+    if "Timeout" in diagnostic:
+        return SourceError(f"Сервер не дождался ответа при открытии {service}.")
+    stage = "открыть страницу" if browser_started else "запустить Chromium"
+    return SourceError(f"Не удалось {stage} для {service} на сервере.")
 
 
 def parse_week(body, start):
@@ -147,7 +166,14 @@ class Portal:
             str(self.profile), env=env, headless=not headed, locale="ru-RU", timezone_id="Europe/Moscow"
         )
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
-        await self.page.goto(PORTAL, wait_until="domcontentloaded", timeout=30000)
+        try:
+            await self.page.goto(PORTAL, wait_until="commit" if headed else "domcontentloaded", timeout=30000)
+        except BrowserError as error:
+            # The SSO redirect can replace the first navigation before it commits.
+            if not headed or "net::ERR_ABORTED" not in str(error) or self.page.is_closed():
+                raise
+            await self.page.wait_for_url(lambda url: urlsplit(url).scheme == "https", timeout=10000,
+                                         wait_until="commit")
 
     async def request(self, day):
         result = await self.page.evaluate(GET_WEEK, [day.isoformat(), (day + timedelta(days=6)).isoformat()])
@@ -201,8 +227,8 @@ class Portal:
             try:
                 await self.open(headed=True,env=env)
                 await self.authorized_week(datetime.now(MSK).date(), interactive=True)
-            except BrowserError:
-                raise SourceError("Вход не завершён. Открой окно входа через кнопку в личном чате и войди в ИТМО ID.") from None
+            except BrowserError as error:
+                raise login_browser_error(error, "my.itmo", self.page is not None) from None
             finally:
                 await self.close()
 

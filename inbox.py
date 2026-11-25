@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from playwright.async_api import Error as BrowserError, async_playwright
 
-from itmo import SourceError
+from itmo import SourceError, login_browser_error
 
 ISU = "https://isu.ifmo.ru"
 ROWS = """rows => rows.map(row => {
@@ -135,8 +135,8 @@ class IsuInbox:
                 await self.open(True,env=env)
                 await self.reach_inbox(True)
                 await self.save_session()
-            except BrowserError:
-                raise SourceError("Вход в ИСУ не завершён. Проверь графический сеанс и окно входа.") from None
+            except BrowserError as error:
+                raise login_browser_error(error, "ИСУ", self.page is not None) from None
             finally:
                 await self.close()
 
