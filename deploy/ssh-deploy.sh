@@ -23,6 +23,8 @@ options=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$known_hosts
          -o 'PreferredAuthentications=password,keyboard-interactive' -o NumberOfPasswordPrompts=1)
 target="$SSH_USER@$SSH_HOST"
 if [[ ${CHECK_LOGIN_ONLY:-0} == 1 ]]; then
+    # Resolve the fixed Compose service on the SSH host.
+    # shellcheck disable=SC2016
     sshpass -e ssh "${options[@]}" -p "$SSH_PORT" "$target" \
         'bot=$(docker ps -q --filter label=com.docker.compose.project=itmo-campus --filter label=com.docker.compose.service=bot); test -n "$bot" && docker exec -i "$bot" python -' < deploy/check-login.py
     exit
