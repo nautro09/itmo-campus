@@ -22,6 +22,11 @@ options=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$known_hosts
          -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o PubkeyAuthentication=no
          -o 'PreferredAuthentications=password,keyboard-interactive' -o NumberOfPasswordPrompts=1)
 target="$SSH_USER@$SSH_HOST"
+if [[ ${CHECK_LOGIN_ONLY:-0} == 1 ]]; then
+    sshpass -e ssh "${options[@]}" -p "$SSH_PORT" "$target" \
+        'bot=$(docker ps -q --filter label=com.docker.compose.project=itmo-campus --filter label=com.docker.compose.service=bot); test -n "$bot" && docker exec -i "$bot" python -' < deploy/check-login.py
+    exit
+fi
 remote="itmo-campus/releases/$GITHUB_SHA-$GITHUB_RUN_ID-${GITHUB_RUN_ATTEMPT:-1}"
 sshpass -e ssh "${options[@]}" -p "$SSH_PORT" "$target" "umask 077; mkdir -p '$remote'"
 sshpass -e scp "${options[@]}" -P "$SSH_PORT" \
