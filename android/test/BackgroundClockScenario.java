@@ -55,6 +55,14 @@ final class BackgroundClockScenario {
             Thread.sleep(800);
             PlanScenario.check(ClockAccess.ready() && rev.equals(prefs.getString("clockInProgress","")),
                 "finishing the activity or interrupting accessibility feedback cancelled the transaction");
+            // The fixture server still serves the real signed 08:30 plan. Nobody opens
+            // Main, requests a manual sync or fires the periodic job during this wait.
+            long until=android.os.SystemClock.elapsedRealtime()+80_000;
+            while(rev.equals(prefs.getString("revision","")) && android.os.SystemClock.elapsedRealtime()<until)
+                Thread.sleep(250);
+            PlanScenario.check(!rev.equals(prefs.getString("revision","")) &&
+                "08:30".equals(NativeClock.time(NativeClock.current(c))),
+                "the closed dashboard did not receive the signed plan in the background");
         }finally{
             prefs.edit().putBoolean("autoClock",false).commit();
             Settings.Secure.putString(c.getContentResolver(),setting,old);
