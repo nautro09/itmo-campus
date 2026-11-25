@@ -72,11 +72,35 @@ def onsite(lesson):
     return not re.search(r"онлайн|дистанц|online|виртуальн|remote", description, re.I)
 
 
+PESOCHNAYA = "Песочная набережная"
+
+
+def campus_name(building):
+    value = building or ""
+    if re.search(r"песочн(?:ая|ой|ую)\s+наб|наб(?:ережная)?\.?\s+песочн", value, re.I):
+        return PESOCHNAYA
+    return value
+
+
+def campus_overrides(overrides):
+    result = {campus_name(k): v for k, v in overrides.items()}
+    if PESOCHNAYA in overrides:
+        result[PESOCHNAYA] = overrides[PESOCHNAYA]
+    return result
+
+
+def campus_travel(overrides, building, default):
+    name = campus_name(building)
+    if name in overrides:
+        return overrides[name]
+    return overrides.get(building, next((v for k,v in overrides.items() if campus_name(k)==name), default))
+
+
 def campus_names(store, cache=None):
     buildings = set(store.get("campus_minutes", {}))
     for day in (cache if cache is not None else store.get("cache", {})).values():
         buildings.update(x["building"] for x in day["lessons"] if x.get("building") and onsite(x))
-    return sorted(buildings)
+    return sorted({PESOCHNAYA, *(campus_name(x) for x in buildings)})
 
 
 def departure(store, now):
@@ -93,7 +117,7 @@ def departure(store, now):
     begins = datetime.fromisoformat(today+"T"+first["time_start"]).replace(tzinfo=MSK)
     minutes = store.get("travel_minutes",35)
     campuses = store.get("campus_minutes",{})
-    minutes = campuses.get(first.get("building",""),minutes)
+    minutes = campus_travel(campuses, first.get("building",""), minutes)
     signature = [today,first["time_start"],first["building"]]
     if begins-timedelta(minutes=minutes) <= now < begins and store.get("departure_sent") != signature:
         store.post(store.get("owner"),f"Пора выходить\n{first['subject']}\nНачало в {first['time_start']}. "

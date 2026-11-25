@@ -69,16 +69,16 @@ class Planner:
         if filt == "По категории":
             query += " AND category=?"
             args += [category]
-        items = self.db.execute(query + " ORDER BY due, id", args).fetchall()
-        page = min(max(0, page), max(0, (len(items)-1)//PAGE))
-        visible = items[page*PAGE:][:PAGE]
+        count = self.db.execute(query.replace("SELECT *", "SELECT COUNT(*)"), args).fetchone()[0]
+        page = min(max(0, page), max(0, (count-1)//PAGE))
+        visible = self.db.execute(query + " ORDER BY due, id LIMIT ? OFFSET ?", [*args, PAGE, page*PAGE]).fetchall()
         entries = [f"#{t['id']}  {short(t['title'])}" for t in visible]
-        lines = [f"{category or filt} · {len(items)}"]
+        lines = [f"{category or filt} · {count}"]
         for label, t in zip(entries, visible):
             lines.append(f"{label}\n    {datetime.fromisoformat(t['due']):%d.%m.%Y в %H:%M} · {t['category']}")
         if not visible:
             lines.append("Здесь пока нет заданий.")
-        rows = [[e] for e in entries] + self.navigation(page, len(items)) + [[NEW, BACK]]
+        rows = [[e] for e in entries] + self.navigation(page, count) + [[NEW, BACK]]
         return self.screen("list", "\n\n".join(lines), rows, filt=filt, category=category, page=page)
 
     def card(self, task, origin=None, note=""):
@@ -86,12 +86,13 @@ class Planner:
         if not t:
             return self.filters()
         steps = self.db.execute("SELECT * FROM steps WHERE task_id=? ORDER BY id", (task,)).fetchall()
-        lead = next(label for label, minutes in REMIND.items() if minutes == t["lead"])
+        lead = (datetime.fromisoformat(t["remind_at"]).strftime("%d.%m.%Y в %H:%M МСК") if t["remind_at"]
+                else next((label for label, minutes in REMIND.items() if minutes == t["lead"]), f"За {t['lead']} мин"))
         due = datetime.fromisoformat(t["due"])
         status = "✅ Выполнено" if t["done"] else "⏳ Открыто"
         if not t["done"] and due < datetime.now(MSK).replace(tzinfo=None):
             status = "🔴 Просрочено"
-        text = f"{status} · #{task}\n{t['title']}\n\n📁 {t['category']}\n📅 {due:%d.%m.%Y в %H:%M} МСК\n🔔 {lead}"
+        text = f"{status} · #{task}\n{t['title']}\n\n📁 {t['category']}\nСдать до {due:%d.%m.%Y в %H:%M} МСК\nНапоминание · {lead}"
         text += f"\n\nПодзадачи · {sum(s['done'] for s in steps)}/{len(steps)}"
         for step in steps[:4]:
             text += "\n" + ("☑ " if step["done"] else "☐ ") + step["title"]
@@ -124,7 +125,7 @@ class Planner:
                            pairs(["09:00", "12:00", "15:00", "18:00", "21:00", "23:59"]) + [[BACK]], data=data)
 
     def lead_picker(self, data):
-        return self.screen("lead", "Когда напомнить о задании?", pairs(list(REMIND)) + [[BACK]], data=data)
+        return self.screen("lead", "Когда напомнить о задании?", pairs(list(REMIND)) + [["Свои минуты", "Дата и время"], [BACK]], data=data)
 
     def selected_category(self, data, category):
         if data["mode"] == "filter":
@@ -156,6 +157,8 @@ class Planner:
                 return self.categories(data)
             if name == "time":
                 return self.date_picker(data)
+            if name in ("lead_exact","lead_minutes"):
+                return self.lead_picker(data)
             if name == "lead" and data["mode"] == "new":
                 return self.time_picker(data)
             if data.get("task"):
@@ -203,16 +206,38 @@ class Planner:
                 return "Выбери время в будущем по Москве, например 18:30.", rows
             due = due.strftime("%Y-%m-%d %H:%M")
             if data["mode"] == "reschedule":
-                self.db.execute("UPDATE tasks SET due=?, reminded=0 WHERE id=?", (due, data["task"]))
+                self.db.execute("UPDATE tasks SET due=?, reminded=CASE WHEN remind_at IS NULL THEN 0 ELSE reminded END WHERE id=?", (due, data["task"]))
                 return self.card(data["task"], data.get("origin"), "Срок перенесён.")
             return self.lead_picker(dict(data, due=due))
-        if name == "lead" and text in REMIND:
+        if name == "lead" and text in ("Дата и время", "Свои минуты"):
+            exact = text == "Дата и время"
+            return self.screen("lead_exact" if exact else "lead_minutes",
+                               "Когда напомнить? Например, 25.11 18:00 МСК. Если год отличается от года сдачи, укажи его полностью." if exact else
+                               "За сколько минут до сдачи напомнить? Введи число от 0 до 525600.", [[BACK]], data=data)
+        if name in ("lead_exact","lead_minutes") or (name == "lead" and text in REMIND):
+            remind_at = None
+            if name == "lead_exact":
+                try:
+                    day, clock = text.split()
+                    if day.count(".") == 1:
+                        due = data.get("due") or self.db.execute("SELECT due FROM tasks WHERE id=?", (data["task"],)).fetchone()[0]
+                        day += "." + due[:4]
+                    remind_at = datetime.strptime(day+" "+clock,"%d.%m.%Y %H:%M").strftime("%Y-%m-%d %H:%M")
+                except ValueError:
+                    return "Укажи дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ.", [[BACK,HOME]]
+                lead = -1
+            elif name == "lead_minutes":
+                if not text.isascii() or not text.isdecimal() or len(text)>6 or int(text)>525600:
+                    return "Введи от 0 до 525600 минут.", [[BACK,HOME]]
+                lead = int(text)
+            else:
+                lead = REMIND[text]
             if data["mode"] == "new":
-                task = self.db.execute("INSERT INTO tasks(title,category,due,lead) VALUES (?,?,?,?)",
-                                       (data["title"],data["category"],data["due"],REMIND[text])).lastrowid
+                task = self.db.execute("INSERT INTO tasks(title,category,due,lead,remind_at) VALUES (?,?,?,?,?)",
+                                       (data["title"],data["category"],data["due"],lead,remind_at)).lastrowid
                 self.db.executemany("INSERT INTO steps(task_id,title) VALUES (?,?)",[(task,x) for x in data.get("steps",[])])
                 return self.card(task, note="Задание сохранено.")
-            self.db.execute("UPDATE tasks SET lead=?, reminded=0 WHERE id=?", (REMIND[text], data["task"]))
+            self.db.execute("UPDATE tasks SET lead=?, remind_at=?, reminded=0 WHERE id=?", (lead,remind_at, data["task"]))
             return self.card(data["task"], data.get("origin"))
         if name == "list":
             origin = {k:s[k] for k in ("filt","category","page")}

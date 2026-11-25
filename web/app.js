@@ -80,7 +80,7 @@
     case "task_from_text":return {draft:sampleDraft(p.text)};
     case "task_save":
       if(!task){task={id:nextId(state.tasks),done:false,steps:(p.steps||[]).map((title,i)=>({id:i+1,title,done:false}))};state.tasks.push(task)}
-      Object.assign(task,{title:p.title,category:p.category,due:p.due,lead:p.lead});
+      Object.assign(task,{title:p.title,category:p.category,due:p.due,lead:p.lead,remind_at:p.remind_at||null});
       if(!state.categories.includes(p.category))state.categories.push(p.category);break;
     case "task_done":task.done=p.done;break;
     case "task_delete":state.tasks=state.tasks.filter(t=>!idsame(t.id,p.id));break;
@@ -220,7 +220,7 @@
   function taskDetails(t){
     const steps=t.steps||[];
     const list=steps.map(st=>`<div class="sub-row">${checkButton("step-done",st,t.id)}<span class="${st.done?"done-text":""}">${esc(st.title)}</span>${iconBtn("delete-step","Удалить подзадачу","close",{id:st.id,parent:t.id})}</div>`).join("");
-    return `<div class="details"><p class="meta">Подзадачи · ${steps.filter(x=>x.done).length}/${steps.length}</p>${list}<form class="step-form" data-form="step" data-id="${esc(t.id)}"><input name="step" aria-label="Название подзадачи" placeholder="Новая подзадача" maxlength="160" required><button class="icon-btn" aria-label="Добавить подзадачу">${ico("plus")}</button></form><div class="btn-row">${btn("edit-task","Изменить","edit","minor",{id:t.id})}${btn("task-done",t.done?"Отменить выполнение":"Выполнить",t.done?"undo":"check","minor",{id:t.id})}${iconBtn("delete-task","Удалить задание","trash",{id:t.id})}</div></div>`;
+    return `<div class="details"><p>Сдать до ${esc(t.due)} МСК<br>Напоминание · ${t.remind_at?esc(t.remind_at)+" МСК":t.lead<0?"выключено":t.lead===0?"в момент сдачи":"за "+esc(t.lead)+" мин до сдачи"}</p><p class="meta">Подзадачи · ${steps.filter(x=>x.done).length}/${steps.length}</p>${list}<form class="step-form" data-form="step" data-id="${esc(t.id)}"><input name="step" aria-label="Название подзадачи" placeholder="Новая подзадача" maxlength="160" required><button class="icon-btn" aria-label="Добавить подзадачу">${ico("plus")}</button></form><div class="btn-row">${btn("edit-task","Изменить","edit","minor",{id:t.id})}${btn("task-done",t.done?"Отменить выполнение":"Выполнить",t.done?"undo":"check","minor",{id:t.id})}${iconBtn("delete-task","Удалить задание","trash",{id:t.id})}</div></div>`;
   }
   function tasks(){
     const filters={active:"Открытые",week:"На неделю",overdue:"Просроченные",done:"Готовые",all:"Все"};
@@ -253,13 +253,6 @@
   }
   function campusFields(){
     const buildings=new Set(state.campuses||Object.keys(state.settings.campus_minutes||{}));
-    for(const day of state.days){
-      if(day.stale)continue;
-      for(const lesson of day.lessons||[]){
-        const building=String(lesson.building||"").trim();
-        if(building&&!/онлайн|дистанц|online|виртуальн|remote/i.test([lesson.format,lesson.work_type,building].join(" ")))buildings.add(building);
-      }
-    }
     const overrides=state.settings.campus_minutes||{};
     const defaultMinutes=Number(state.settings.travel_minutes)||35;
     return [...buildings].sort((a,b)=>a.localeCompare(b,"ru")).map(building=>{
@@ -303,8 +296,16 @@
     const cats=[...new Set([...state.categories,draft.category||"Учёба"])];
     const due=(draft.due||state.today+" 23:59").replace("T"," ").split(" ");
     const stepsInput=existing?"":`<label>Подзадачи <small class="muted">Каждый шаг с новой строки</small><textarea name="steps" rows="2" maxlength="4000" style="min-height:65px">${(draft.steps||[]).map(step=>esc(typeof step==="string"?step:step.title)).join("\n")}</textarea></label>`;
-    const leads=[[-1,"Без напоминания"],[0,"В момент срока"],[15,"За 15 минут"],[60,"За час"],[1440,"За сутки"]];
-    modal(existing?"Изменить задание":"Новое задание",`<form class="form" data-form="task"${existing?attr("id",draft.id):""}><label>Что нужно сделать<input name="title" maxlength="160" value="${esc(draft.title||"")}" required></label><label>Категория<input name="category" list="categories" value="${esc(draft.category||"Учёба")}" maxlength="32" required><datalist id="categories">${cats.map(c=>`<option value="${esc(c)}"></option>`).join("")}</datalist></label><div class="pair"><label>Дата сдачи<input name="day" type="date" value="${esc(due[0])}" required></label><label>Время по Москве<input name="time" type="time" value="${esc((due[1]||"23:59").slice(0,5))}" required></label></div><label>Напомнить<select name="lead">${leads.map(([v,n])=>`<option value="${v}" ${Number(draft.lead??60)===v?"selected":""}>${n}</option>`).join("")}</select></label>${stepsInput}<div class="btn-row">${btn("close-modal","Отмена",null)}<button class="btn primary" type="submit">Сохранить</button></div></form>`);
+    const leads=[[-1,"Без напоминания"],[0,"В момент срока"],[15,"За 15 минут"],[60,"За час"],[1440,"За сутки"],["custom","За своё число минут"],["exact","В дату и время"]];
+    const mode=draft.remind_at?"exact":leads.some(([v])=>v===(draft.lead??60))?(draft.lead??60):"custom";
+    modal(existing?"Изменить задание":"Новое задание",`<form class="form" data-form="task"${existing?attr("id",draft.id):""}><label>Что нужно сделать<input name="title" maxlength="160" value="${esc(draft.title||"")}" required></label><label>Категория<input name="category" list="categories" value="${esc(draft.category||"Учёба")}" maxlength="32" required><datalist id="categories">${cats.map(c=>`<option value="${esc(c)}"></option>`).join("")}</datalist></label><div class="pair"><label>Дата сдачи<input name="day" type="date" value="${esc(due[0])}" required></label><label>Время по Москве<input name="time" type="time" value="${esc((due[1]||"23:59").slice(0,5))}" required></label></div><label>Напомнить<select name="lead">${leads.map(([v,n])=>`<option value="${v}" ${mode===v?"selected":""}>${n}</option>`).join("")}</select></label><label data-mode="custom">За сколько минут до сдачи<input name="minutes" type="number" min="0" max="525600" value="${esc(mode==="custom"?draft.lead:90)}" required></label><label data-mode="exact">Напомнить по Москве<input type="datetime-local" name="exact" value="${esc((draft.remind_at||"").replace(" ","T"))}" required></label>${stepsInput}<div class="btn-row">${btn("close-modal","Отмена",null)}<button class="btn primary" type="submit">Сохранить</button></div></form>`);
+    reminderInputs(dialog.querySelector("form"));
+  }
+  function reminderInputs(form){
+    for(const label of form.querySelectorAll("[data-mode]")){
+      const active=label.dataset.mode===form.elements.lead.value;
+      label.hidden=!active;label.style.display=active?"":"none";label.querySelector("input").disabled=!active;
+    }
   }
   function textTask(value=""){modal("Задание из сообщения",`<form class="form" data-form="text"><p class="desc">Вставь текст задания. Проверь название и срок в черновике перед сохранением.</p><label>Сообщение<textarea name="text" maxlength="4000" required>${esc(value)}</textarea></label><div class="btn-row">${btn("close-modal","Отмена",null)}<button class="btn primary">Подготовить черновик</button></div></form>`)}
   function confirmDelete(t){modal("Удалить задание?",`<p class="notice-text">${esc(t.title)}. Вместе с заданием будут удалены его подзадачи.</p><div class="btn-row">${btn("close-modal","Оставить",null)}${btn("confirm-delete","Удалить","trash","danger",{id:t.id})}</div>`)}
@@ -356,7 +357,8 @@
     }
   });
   document.addEventListener("change",async e=>{
-    const el=e.target;if(el.dataset.control==="category"){category=el.value;render();return}
+    const el=e.target;if(el.name==="lead"&&el.form){reminderInputs(el.form);return}
+    if(el.dataset.control==="category"){category=el.value;render();return}
     if(el.hasAttribute("data-campus")&&state){
       if(!el.reportValidity())return;
       const overrides=Object.assign(Object.create(null),state.settings.campus_minutes||{});
@@ -381,7 +383,7 @@
     }
     case "step":await perform("step_add",{task_id:Number(form.dataset.id),title:str("step")},{message:"Подзадача добавлена."});break;
     case "task":{
-      const p={title:str("title"),category:str("category"),due:str("day")+" "+str("time"),lead:Number(str("lead"))};
+      const p={title:str("title"),category:str("category"),due:str("day")+" "+str("time"),lead:str("lead")==="custom"?Number(str("minutes")):str("lead")==="exact"?-1:Number(str("lead")),remind_at:str("lead")==="exact"?str("exact").replace("T"," "):null};
       if(form.dataset.id)p.id=Number(form.dataset.id);
       else p.steps=str("steps").split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
       const result=await perform("task_save",p,{close:true,message:"Задание сохранено."});if(result&&!p.id)adjustAfterAdd();break}

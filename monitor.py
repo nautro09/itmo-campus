@@ -124,13 +124,14 @@ class Monitor:
         if not chat:
             return
         with self.s.db:
-            for t in self.s.db.execute("SELECT * FROM tasks WHERE done=0 AND reminded=0 AND lead>=0").fetchall():
+            for t in self.s.db.execute("""SELECT * FROM tasks WHERE done=0 AND reminded=0 AND (lead>=0 OR remind_at IS NOT NULL)
+                    AND COALESCE(remind_at, strftime('%Y-%m-%d %H:%M',due,'-' || lead || ' minutes'))<=?
+                    ORDER BY due,id""", (now.strftime("%Y-%m-%d %H:%M"),)).fetchall():
                 due = datetime.fromisoformat(t["due"]).replace(tzinfo=MSK)
-                if now >= due - timedelta(minutes=t["lead"]):
-                    title = "Срок прошёл" if now > due + timedelta(minutes=1) else "Напоминание"
-                    if self.s.get("notify_due",True):
-                        self.s.post(chat, f"{title} · #{t['id']}\n{t['title']}\n{t['category']} · {due:%d.%m.%Y в %H:%M} МСК", delivery="background", rubric="due")
-                    self.s.db.execute("UPDATE tasks SET reminded=1 WHERE id=?", (t["id"],))
+                title = "Срок прошёл" if now > due + timedelta(minutes=1) else "Напоминание"
+                if self.s.get("notify_due",True):
+                    self.s.post(chat, f"{title} · #{t['id']}\n{t['title']}\n{t['category']} · Сдать до {due:%d.%m.%Y в %H:%M} МСК", delivery="background", rubric="due")
+                self.s.db.execute("UPDATE tasks SET reminded=1 WHERE id=?", (t["id"],))
         if self.should_fetch(now):
             await self.fetch(automatic=True)
             with self.s.db:

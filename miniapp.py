@@ -10,9 +10,8 @@ from urllib.parse import parse_qsl
 from aiohttp import web
 import wake
 from private_login import PrivateLogin, viewer_policy
-from extras import campus_names, draft_task, weekly_report
+from extras import campus_overrides, campus_names, draft_task, weekly_report
 from itmo import MSK
-from planner import REMIND
 
 WEB = Path(__file__).resolve().parent/"web"
 DEFAULTS = dict(**wake.DEFAULTS,notify_isu=True,notify_imap=True,notify_bars=True,notify_schedule=True,notify_due=True,quiet_on=True,quiet_start="23:00",quiet_end="07:00",quiet_first=True,theme="paper",morning_on=True,morning_time="07:30",interval=1,travel_on=False,
@@ -53,7 +52,7 @@ def state(bot):
     s = bot.s
     now = datetime.now(MSK)
     tasks = [dict(r,done=bool(r["done"]),steps=[]) for r in s.db.execute(
-        "SELECT id,title,category,due,lead,done FROM tasks ORDER BY due,id")]
+        "SELECT id,title,category,due,lead,remind_at,done FROM tasks ORDER BY due,id")]
     by_id = {t["id"]:t for t in tasks}
     for row in s.db.execute("SELECT id,task_id,title,done FROM steps ORDER BY id"):
         by_id[row["task_id"]]["steps"].append(dict(row,done=bool(row["done"])))
@@ -62,8 +61,10 @@ def state(bot):
     stale = bool(s.get("source_error"))
     latest = set(s.get("latest_dates", []))
     pending = bot.check_job is not None and not bot.check_job.done()
+    settings = {k:s.get(k,v) for k,v in DEFAULTS.items()}
+    settings["campus_minutes"] = campus_overrides(settings["campus_minutes"])
     return dict(outlook_available=bool(os.getenv("MS_CLIENT_ID")),wake_preview=wake.proposal(s,now),wake_status=wake.status(s), campuses=campus_names(s,cache), bars=bot.grades.report(), check_pending=pending, today=now.date().isoformat(),now=now.isoformat(),profile=s.get("profile",{}),
-                settings={k:s.get(k,v) for k,v in DEFAULTS.items()},services=statuses,
+                settings=settings,services=statuses,
                 days=[dict(date=d,lessons=item["lessons"],checked=item["checked"],stale=bool(stale or d not in latest or item["checked"][:10]!=now.date().isoformat())) for d,item in sorted(cache.items()) if d>=now.date().isoformat()],
                 tasks=tasks,categories=[r[0] for r in s.db.execute("SELECT name FROM categories ORDER BY name")],
                 mail=[dict(r) for r in s.db.execute("SELECT id,source,subject,sender,date,body FROM mail ORDER BY id DESC LIMIT 100")],
@@ -103,7 +104,7 @@ def save_settings(store, values):
         elif k=="campus_minutes":
             if not isinstance(v,dict) or len(v)>100:
                 raise ValueError("Проверь список корпусов.")
-            v={field(building,256):integer(minutes,1,240) for building,minutes in v.items()}
+            v=campus_overrides({field(building,256):integer(minutes,1,240) for building,minutes in v.items()})
         elif k=="wake_rules":
             wake.rules(v)
         elif k in ("wake_prep","wake_online"):
@@ -119,23 +120,25 @@ def change_task(db,action,p):
     if action=="task_save":
         title, category = field(p["title"],160),field(p["category"],32)
         due = datetime.strptime(field(p["due"],16),"%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M")
-        lead = integer(p["lead"],-1,1440)
-        if lead not in REMIND.values():
-            raise ValueError("Выбери время напоминания.")
+        lead = integer(p["lead"],-1,525600)
+        remind_at = p.get("remind_at") or None
+        if remind_at is not None:
+            remind_at = datetime.strptime(field(remind_at,16), "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M")
+            lead = -1
         db.execute("INSERT OR IGNORE INTO categories VALUES (?)",(category,))
         if "id" not in p:
             steps = p.get("steps",[])
             if not isinstance(steps,list) or len(steps)>30:
                 raise ValueError("Можно добавить до 30 шагов за раз.")
-            task=db.execute("INSERT INTO tasks(title,category,due,lead) VALUES (?,?,?,?)",(title,category,due,lead)).lastrowid
+            task=db.execute("INSERT INTO tasks(title,category,due,lead,remind_at) VALUES (?,?,?,?,?)",(title,category,due,lead,remind_at)).lastrowid
             db.executemany("INSERT INTO steps(task_id,title) VALUES (?,?)",[(task,field(x,160)) for x in steps])
             return
     task = integer(p.get("task_id") if action.startswith("step_") else p.get("id"),1,2**63-1)
     if not db.execute("SELECT 1 FROM tasks WHERE id=?",(task,)).fetchone():
         raise ValueError("Задание уже удалено. Обнови список.")
     if action=="task_save":
-        db.execute("UPDATE tasks SET reminded=CASE WHEN lead!=? OR due!=? THEN 0 ELSE reminded END, title=?,category=?,due=?,lead=? WHERE id=?",
-                   (lead,due,title,category,due,lead,task))
+        db.execute("UPDATE tasks SET reminded=CASE WHEN lead!=? OR remind_at IS NOT ? OR (remind_at IS NULL AND due!=?) THEN 0 ELSE reminded END, title=?,category=?,due=?,lead=?,remind_at=? WHERE id=?",
+                   (lead,remind_at,due,title,category,due,lead,remind_at,task))
     elif action=="task_done":
         db.execute("UPDATE tasks SET done=? WHERE id=?",(boolean(p["done"]),task))
     elif action=="task_delete":
@@ -230,7 +233,7 @@ def application(bot,token):
     wake.register(app,bot.s)
     app.router.add_get("/pair",asset)
     app.router.add_get("/",asset)
-    app.router.add_get("/{asset:index\\.html|app\\.js|app\\.css|qr\\.js|pair\\.js|login\\.html|login\\.css|telegram-web-app\\.js}",asset)
+    app.router.add_get("/{asset:index\\.html|app\\.js|app\\.css|qr\\.js|pair\\.js|login\\.html|login\\.css|login-input\\.js|telegram-web-app\\.js}",asset)
     app.router.add_post("/api/services",api)
     app.router.add_post("/api/state",api)
     app.router.add_post("/api/action",api)

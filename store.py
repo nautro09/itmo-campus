@@ -32,6 +32,11 @@ class Store:
             );
         """)
         with self.db:
+            if "remind_at" not in {r[1] for r in self.db.execute("PRAGMA table_info(tasks)")}:
+                self.db.execute("ALTER TABLE tasks ADD COLUMN remind_at TEXT")
+            self.db.execute("""CREATE INDEX IF NOT EXISTS tasks_pending ON tasks(
+                COALESCE(remind_at, strftime('%Y-%m-%d %H:%M',due,'-' || lead || ' minutes')))
+                WHERE done=0 AND reminded=0 AND (lead>=0 OR remind_at IS NOT NULL)""")
             columns = {row[1] for row in self.db.execute("PRAGMA table_info(outbox)")}
             if "delivery" not in columns:
                 self.db.execute("ALTER TABLE outbox ADD COLUMN delivery TEXT NOT NULL DEFAULT 'direct'")
@@ -67,15 +72,30 @@ class Store:
                 if not self.get("quiet_first",True):
                     self.db.execute("UPDATE outbox SET delivery='held' WHERE delivery='first'")
             else:
-                held = self.db.execute("SELECT chat,text FROM outbox WHERE delivery='held' ORDER BY id").fetchall()
+                held = self.db.execute("SELECT chat,text,rubric FROM outbox WHERE delivery='held' ORDER BY id").fetchall()
                 if held:
                     self.db.execute("DELETE FROM outbox WHERE delivery='held'")
                     groups = {}
+                    labels = {"due":"Задания", "changes":"Изменения пар", "grades":"Баллы БаРС",
+                              "mail":"Почта", "morning":"Расписание", "departure":"Дорога", "week":"За неделю"}
                     for row in held:
-                        groups.setdefault(row["chat"], []).append(row["text"])
-                    for chat, messages in groups.items():
-                        self.post(chat, "Сводка за тихие часы\n\n" + "\n\n".join(messages),
-                                  delivery="background", now=now, rubric="digest")
+                        label = labels.get(row["rubric"], "Другие уведомления")
+                        groups.setdefault(row["chat"], {}).setdefault(label, []).append(row["text"])
+                    for chat, sections in groups.items():
+                        parts = ["Сводка за тихие часы"]
+                        for label, messages in sections.items():
+                            parts.append(f"{label} · {len(messages)}")
+                            counts = {}
+                            for message in messages:
+                                counts[message] = counts.get(message, 0) + 1
+                            entries = []
+                            for message, count in counts.items():
+                                if label == "Почта" and len(message) > 300:
+                                    message = message[:260].rstrip() + "…\nПолный текст в разделе «Почта»."
+                                repeat = f" (×{count})" if count > 1 else ""
+                                entries.append("• " + message.strip() + repeat)
+                            parts[-1] += "\n" + "\n".join(entries)
+                        self.post(chat, "\n\n".join(parts), delivery="background", now=now, rubric="digest")
             # Each lookup uses the (delivery, id) index and preserves order within the class.
             for priority in ("direct", "first", "background"):
                 row = self.db.execute("SELECT * FROM outbox WHERE delivery=? ORDER BY id LIMIT 1",
@@ -88,6 +108,8 @@ class Store:
         if delivery in ("first","background") and self.quiet(now):
             if delivery == "background" or not self.get("quiet_first",True):
                 delivery = "held"
+        if delivery == "held" and rubric == "mail" and len(message) > 300:
+            message = message[:260].rstrip() + "…\nПолный текст в разделе «Почта»."
         # Stay below Telegram's UTF-16 length limit, including long emoji-rich text.
         chunks, chunk, units = [], "", 0
         for line in message.splitlines(keepends=True):

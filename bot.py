@@ -21,7 +21,7 @@ from monitor import Monitor
 from planner import BACK, HOME, MAIN, SETTINGS, TODAY, TOMORROW, Planner, pairs
 from store import Store
 from dotenv import load_dotenv
-from extras import campus_names, draft_task, weekly_report
+from extras import campus_overrides, campus_travel, campus_names, draft_task, weekly_report
 from inbox import IsuInbox
 from mailbox_sync import ENV, Mail
 from miniapp import start_web, services
@@ -251,7 +251,7 @@ class Bot:
             if text=="Изменить срок" or (text=="Сохранить черновик" and not d["due"]):
                 return self.plan.date_picker(data)
             if text=="Сохранить черновик":
-                return self.plan.handle("За час",dict(name="lead",data=data))
+                return self.plan.lead_picker(data)
         if name=="draft_title" and text!=BACK:
             d=screen["draft"]
             if not 1<=len(text)<=160:
@@ -265,11 +265,11 @@ class Bot:
             return self.plan.screen("campuses", "Выбери корпус из расписания." if names else "Корпуса появятся после загрузки очных пар.",
                                     [[building] for building in names]+[[BACK]], buildings=names)
         if name=="campuses" and text in screen.get("buildings",[]):
-            minutes = self.s.get("campus_minutes",{}).get(text,self.s.get("travel_minutes",35))
+            minutes = campus_travel(self.s.get("campus_minutes",{}),text,self.s.get("travel_minutes",35))
             return self.plan.screen("campus_time", f"{text} · сейчас {minutes} мин. Введи от 1 до 240 минут.",
                                     [["20","35","50"],["Общее время"],[BACK]],building=text)
         if name=="campus_time":
-            values = self.s.get("campus_minutes",{})
+            values = campus_overrides(self.s.get("campus_minutes",{}))
             if text=="Общее время":
                 values.pop(screen["building"],None)
             elif text.isdecimal() and 1<=int(text)<=240:
@@ -342,7 +342,7 @@ class Bot:
             return self.plan.screen("wake",details+"\n"+wake.status(self.s)+"\n"+notice,
                 [["Переключить будильник",wake.PAIR_LABEL],["Время сборов","До онлайн-пары"],["Правила подъёма","Выходной: менять режим"],["Отозвать доступ"],[BACK]])
         if text=="🔔 Уведомления" or name=="notice_types" and text!=BACK:
-            options={"Письма ИСУ":"notify_isu","Письма IMAP":"notify_imap","Баллы БаРС":"notify_bars","Изменения пар":"notify_schedule","Дедлайны":"notify_due","Дорога":"travel_on","Утренняя рассылка":"morning_on","Недельная сводка":"weekly_on"}
+            options={"Письма ИСУ":"notify_isu","Письма IMAP":"notify_imap","Баллы БаРС":"notify_bars","Изменения пар":"notify_schedule","Дедлайны":"notify_due"}
             label=text.removeprefix("✓ ").removeprefix("○ ")
             if label in options:
                 key=options[label]

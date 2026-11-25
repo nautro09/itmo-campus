@@ -21,7 +21,10 @@ class Viewer(IsolatedAsyncioTestCase):
                 async with async_playwright() as p:
                     browser=await p.chromium.launch(headless=False,env=env)
                     page=await browser.new_page()
-                    await page.set_content("<h1>Private fixture</h1>")
+                    await page.route("https://id.itmo.ru/**", lambda route: route.fulfill(content_type="text/html", body="<input id='field'>"))
+                    await page.goto("https://id.itmo.ru/test")
+                    await page.locator("#field").focus()
+                    bot.portal.page = page
                     opened.set()
                     await asyncio.Event().wait()
             finally:
@@ -47,6 +50,13 @@ class Viewer(IsolatedAsyncioTestCase):
             except Exception:
                 self.fail("viewer failed: "+(await page.locator("body").inner_text())[:800])
             await asyncio.wait_for(opened.wait(),10)
+            forbidden = await context.request.post(host+"/login/type", headers={"Origin":"https://example.org"}, data="fixture")
+            self.assertEqual(forbidden.status,403)
+            await page.locator("#entry").fill("Пример 123")
+            await page.get_by_role("button", name="Ввести", exact=True).click()
+            await page.get_by_text("Введено в выбранное поле.").wait_for(timeout=5000)
+            self.assertEqual(await bot.portal.page.locator("#field").input_value(),"Пример 123")
+            self.assertEqual(await page.locator("#entry").input_value(),"")
             headers={"X-Telegram-Init-Data":signed(123,"fixture",int(time.time()))}
             # The normal issue rate is three seconds per owner.
             await asyncio.sleep(3)

@@ -88,4 +88,18 @@ curl --fail --silent --show-error --retry 3 --retry-all-errors --max-time 10 \
 ln -sfn -- "$release" current.next
 mv -Tf -- current.next current
 trap - ERR HUP INT TERM
+compose "$release" exec -T bot python - "$revision" <<'PY'
+import sys
+from store import Store
+
+store = Store("/app/data/planner.sqlite3")
+with store.db:
+    store.db.execute("BEGIN IMMEDIATE")
+    owner = store.get("owner")
+    key = "release_notified_" + sys.argv[1]
+    if owner and not store.get(key):
+        store.post(owner, "Произошло обновление кода!")
+        store.set(key, True)
+        print("Release notification queued")
+PY
 echo "Deployed $revision; container and HTTP checks passed"

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
 from aiohttp import web, WSMsgType
+from playwright.async_api import Error as BrowserError
 
 ASSETS = Path("/usr/share/novnc")
 
@@ -92,6 +93,8 @@ async def display():
 
 @dataclass
 class LoginWindow:
+    key: str
+    source: str
     identity: str = field(default_factory=lambda: secrets.token_hex(16))
     stop: asyncio.Event = field(default_factory=asyncio.Event)
     closed: asyncio.Event = field(default_factory=asyncio.Event)
@@ -131,7 +134,7 @@ class PrivateLogin:
         self.ticket = (key, self.last+45, source)
         response = web.json_response({"viewer":"/login.html"})
         # Partition by the embedding site so Telegram Web works with third-party cookies blocked.
-        response.headers.add("Set-Cookie", f"__Secure-para-login={key}; Max-Age=45; Path=/login/socket; "
+        response.headers.add("Set-Cookie", f"__Secure-para-login={key}; Max-Age=465; Path=/login/; "
                              "HttpOnly; Secure; SameSite=None; Partitioned")
         return response
 
@@ -147,7 +150,7 @@ class PrivateLogin:
         if not ws.can_prepare(request).ok:
             raise web.HTTPBadRequest()
         self.ticket=None
-        window = self.active = LoginWindow()
+        window = self.active = LoginWindow(key, source)
         try:
             await ws.prepare(request)
             await asyncio.wait_for(self.session(ws,source,window),timeout=420)
@@ -181,7 +184,38 @@ class PrivateLogin:
                     task.cancel()
                 await asyncio.gather(*tasks,return_exceptions=True)
 
+    async def type_text(self, request):
+        origin = self.bot.s.get("wake_origin") or os.getenv("MINI_APP_URL","").rstrip("/")
+        window = self.active
+        key = request.cookies.get("__Secure-para-login","")
+        if (not window or window.stop.is_set() or not origin or request.headers.get("Origin") != origin or
+                not hmac.compare_digest(key.encode(), window.key.encode())):
+            raise web.HTTPForbidden()
+        if request.content_type != "text/plain":
+            raise web.HTTPUnsupportedMediaType()
+        value = await request.text()
+        if not 1 <= len(value) <= 2048 or any(ord(ch)<32 for ch in value):
+            raise web.HTTPBadRequest()
+        page = (self.bot.isu if window.source=="isu" else self.bot.portal).page
+        if page and not page.is_closed():
+            # Check the origin and the focused field in the same script invocation.
+            try:
+                inserted = await page.evaluate("""text => {
+                    if (!['https://id.itmo.ru','https://my.itmo.ru','https://isu.ifmo.ru',
+                          'https://isu.itmo.ru'].includes(location.origin)) return false;
+                    const e = document.activeElement;
+                    if (!(e instanceof HTMLInputElement) || e.disabled || e.readOnly ||
+                        !['text','email','password','tel','number'].includes(e.type)) return false;
+                    return document.execCommand('insertText',false,text);
+                }""", value)
+                if inserted:
+                    return web.Response(status=204)
+            except BrowserError:
+                pass
+        raise web.HTTPConflict(text="Коснись поля на странице ИТМО и повтори ввод.")
+
     def register(self,app):
+        app.router.add_post("/login/type", self.type_text)
         app.router.add_post("/login/open/{source:itmo|isu}",self.issue)
         app.router.add_get("/login/socket",self.socket)
         if self.available:

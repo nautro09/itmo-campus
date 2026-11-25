@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta
 
 from aiohttp import web
-from extras import onsite
+from extras import onsite, campus_travel
 from itmo import MSK
 
 PAIR_LABEL = "Привязать будильник телефона к расписанию"
@@ -64,7 +64,7 @@ def plan(store, now=None):
             travel = store.get("travel_minutes", 35)
             prep = store.get("wake_prep", 40)
             online = store.get("wake_online", 20)
-            lead, basis = max((prep + campus.get(lesson.get("building"), travel), "travel")
+            lead, basis = max((prep + campus_travel(campus, lesson.get("building"), travel), "travel")
                               if onsite(lesson) else (online, "online") for lesson in first)
             at = begins - timedelta(minutes=lead)
         if at > now:
