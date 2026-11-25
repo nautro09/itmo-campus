@@ -18,9 +18,15 @@ public final class ClockAccess extends AccessibilityService {
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final Runnable tick=this::step;
     private final Runnable check=this::onAvailable;
+    private final Runnable pollWhileUnlocked=()->{
+        if(unlocked())onAvailable();
+    };
     private final Runnable checkList=this::resumeFromList;
     private final BroadcastReceiver unlock=new BroadcastReceiver(){
-        public void onReceive(Context c,Intent i){onAvailable();}
+        public void onReceive(Context c,Intent i){
+            if(Intent.ACTION_SCREEN_OFF.equals(i.getAction()))handler.removeCallbacks(pollWhileUnlocked);
+            else if(unlocked())onAvailable();
+        }
     };
     private final ConnectivityManager.NetworkCallback network=new ConnectivityManager.NetworkCallback(){
         private Network online;
@@ -35,7 +41,8 @@ public final class ClockAccess extends AccessibilityService {
     private boolean enable,networkRegistered,unlockRegistered,synchronizing;
     private ClockEditor editor;
     private long deadline,startLimit,nextStep;
-    private boolean sawClock;
+    private boolean sawClock, returnAfterSave;
+    private long startedAt;
     private String controls="";
     private SharedPreferences prefs(){return Link.prefs(this);}
     static boolean ready(){return connected!=null;}
@@ -74,6 +81,8 @@ public final class ClockAccess extends AccessibilityService {
         }
         if(!unlockRegistered){
             IntentFilter filter=new IntentFilter(Intent.ACTION_USER_PRESENT);
+            filter.addAction(Intent.ACTION_SCREEN_ON);
+            filter.addAction(Intent.ACTION_SCREEN_OFF);
             if(Build.VERSION.SDK_INT>=33)registerReceiver(unlock,filter,Context.RECEIVER_NOT_EXPORTED);
             else registerReceiver(unlock,filter);
             unlockRegistered=true;
@@ -195,6 +204,12 @@ public final class ClockAccess extends AccessibilityService {
     }
     private void begin(){
         if(connected!=this || !prefs().getBoolean("autoClock",false) || !prefs().contains("cipher"))return;
+        // Keep polling only while Android could actually edit the stock Clock.
+        // The persisted system job continues fetching plans with the screen off.
+        if(unlocked() && !prefs().getBoolean("syncBlocked",false) && !handler.hasCallbacks(pollWhileUnlocked)){
+            long delay=prefs().getString("syncIssue","").isEmpty()?NativeClock.MINUTE:5*NativeClock.MINUTE;
+            handler.postDelayed(pollWhileUnlocked,delay);
+        }
         String rev=prefs().getString("revision","");
         if(!revision.isEmpty()){
             if(revision.equals(rev)){scheduleStep(180);return;}
@@ -239,8 +254,9 @@ public final class ClockAccess extends AccessibilityService {
         prefs().edit().putInt("attempts",attempts).putLong("retryAfter",now.toEpochMilli()+5*NativeClock.MINUTE)
             .putString("clockInProgress",rev).putString("clockTrace","Ожидаю первое окно штатных Часов").apply();
         if(Build.VERSION.SDK_INT>=33)clearCache();
-        deadline=SystemClock.elapsedRealtime()+65_000;startLimit=SystemClock.elapsedRealtime()+12_000;
-        sawClock=false;controls="";
+        startedAt=SystemClock.elapsedRealtime();
+        deadline=startedAt+65_000;startLimit=startedAt+12_000;
+        sawClock=false;returnAfterSave=false;controls="";
         try{
             AccessibilityNodeInfo active=foreground(pkg);
             boolean onList=false;
@@ -251,11 +267,14 @@ public final class ClockAccess extends AccessibilityService {
                     waitForList();return;
                 }
             }
-            if(!onList)startActivity(clock.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            if(!onList){
+                returnAfterSave=active!=null && !pkg.contentEquals(String.valueOf(active.getPackageName()));
+                startActivity(clock.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            }
         }
         catch(RuntimeException e){fail("Android не открыл штатные Часы",true);return;}
         status("Открываю штатные Часы");
-        scheduleStep(160);
+        scheduleStep(90);
     }
     private void waitForList(){
         prefs().edit().putString("awaitClock",revision).remove("retryAfter").apply();
@@ -274,6 +293,16 @@ public final class ClockAccess extends AccessibilityService {
     private void success(){
         String rev=revision;
         boolean confirmed=NativeClock.verified(this,rev,enable,target);
+        if(confirmed){
+            long duration=SystemClock.elapsedRealtime()-startedAt;
+            prefs().edit().putLong("lastClockMs",duration).apply();
+            // Only leave the verified list if this transaction brought Clock to the front.
+            if(returnAfterSave && unlocked()){
+                AccessibilityNodeInfo root=getRootInActiveWindow();
+                if(root!=null && pkg.contentEquals(String.valueOf(root.getPackageName())))
+                    performGlobalAction(GLOBAL_ACTION_BACK);
+            }
+        }
         reset();
         if(!confirmed){begin();return;}
         Link.worker.execute(()->{
@@ -287,9 +316,9 @@ public final class ClockAccess extends AccessibilityService {
         });
     }
     public void onAccessibilityEvent(AccessibilityEvent event){
-        if(editor!=null && event.getEventType()==AccessibilityEvent.TYPE_WINDOWS_CHANGED){scheduleStep(160);return;}
+        if(editor!=null && event.getEventType()==AccessibilityEvent.TYPE_WINDOWS_CHANGED){scheduleStep(65);return;}
         if(!PACKAGES.contains(String.valueOf(event.getPackageName())))return;
-        if(editor!=null && pkg.contentEquals(event.getPackageName())){scheduleStep(160);return;}
+        if(editor!=null && pkg.contentEquals(event.getPackageName())){scheduleStep(65);return;}
         if(!prefs().contains("awaitClock") || !prefs().getBoolean("autoClock",false) || handler.hasCallbacks(checkList))return;
         handler.postDelayed(checkList,200);
     }
@@ -332,9 +361,13 @@ public final class ClockAccess extends AccessibilityService {
                 String phase=editor.trace;
                 int actions=editor.actions;
                 editor.advance(nodes);
-                if(Build.VERSION.SDK_INT>=33 && actions!=editor.actions)clearCache();
+                if(actions!=editor.actions){
+                    if(Build.VERSION.SDK_INT>=33)clearCache();
+                    scheduleStep(140);
+                }
                 if(!sawClock || !phase.equals(editor.trace) || editor.failure!=null){
-                    controls=ClockUi.describe(nodes);
+                    if(!sawClock || editor.failure!=null || actions==editor.actions || controls.isEmpty())
+                        controls=ClockUi.describe(nodes);
                     prefs().edit().putString("clockTrace",editor.trace+"\n"+controls).apply();
                     status(editor.trace);
                 }

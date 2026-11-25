@@ -280,6 +280,8 @@ public class Main extends Activity {
             catch(android.content.pm.PackageManager.NameNotFoundException ignored){}
         }else text.append("\nШтатные Часы не определены");
         text.append("\nПлан получен · ").append(stamp(prefs.getLong("lastReceived",0)));
+        long elapsed=prefs.getLong("lastClockMs",-1);
+        if(elapsed>=0)text.append("\nПоследняя успешная проверка в Часах · ").append(elapsed).append(" мс");
         for(String key:new String[]{"syncIssue","autoStatus","clockTrace"}){
             String value=prefs.getString(key,"");if(!value.isEmpty())text.append("\n").append(value);
         }

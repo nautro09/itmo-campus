@@ -4,4 +4,4 @@
     android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
     android:packageNames="com.hihonor.deskclock,com.honor.deskclock,com.huawei.deskclock,com.android.deskclock"
-    android:notificationTimeout="150" android:description="@string/clock_access_description"/>
+    android:notificationTimeout="75" android:description="@string/clock_access_description"/>
