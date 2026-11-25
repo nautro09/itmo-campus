@@ -204,7 +204,7 @@ class PrivateLogin:
                     if (!['https://id.itmo.ru','https://my.itmo.ru','https://isu.ifmo.ru',
                           'https://isu.itmo.ru'].includes(location.origin)) return false;
                     const e = document.activeElement;
-                    if (!(e instanceof HTMLInputElement) || e.disabled || e.readOnly ||
+                    if (!document.hasFocus() || !(e instanceof HTMLInputElement) || e.disabled || e.readOnly ||
                         !['text','email','password','tel','number'].includes(e.type)) return false;
                     return document.execCommand('insertText',false,text);
                 }""", value)

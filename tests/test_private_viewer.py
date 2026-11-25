@@ -13,6 +13,27 @@ from test_campus import signed
 
 @skipUnless(os.getenv("TEST_ISU_BROWSER")=="1", "requires production image")
 class Viewer(IsolatedAsyncioTestCase):
+    async def test_mobile_task_editor_submits_selected_reminder(self):
+        async with TestServer(application(Mock(),"fixture")) as server, async_playwright() as p:
+            browser = await p.chromium.launch()
+            page = await browser.new_page(viewport={"width":390,"height":844}, is_mobile=True)
+            await page.goto(str(server.make_url("/")) + "?demo=1#tasks")
+            await page.locator('[data-action="new-task"]').click()
+            form = page.locator('form[data-form="task"]')
+            await form.locator('[name="title"]').fill("Подготовиться к КР")
+            await form.locator('[name="day"]').fill("2026-11-26")
+            await form.locator('[name="time"]').fill("08:10")
+            await form.locator('[name="lead"]').select_option("custom")
+            self.assertTrue(await form.locator('[name="minutes"]').is_visible())
+            await form.locator('[name="lead"]').select_option("exact")
+            self.assertTrue(await form.locator('[name="minutes"]').is_disabled())
+            await form.locator('[name="exact"]').fill("2026-11-25T18:00")
+            await form.get_by_role("button",name="Сохранить",exact=True).click()
+            await form.wait_for(state="hidden")
+            task = await page.evaluate("""() => JSON.parse(localStorage.getItem('para.demo.v2')).tasks.find(t=>t.title==='Подготовиться к КР')""")
+            self.assertEqual((task["due"],task["remind_at"]), ("2026-11-26 08:10","2026-11-25 18:00"))
+            await browser.close()
+
     async def test_only_owner_reaches_real_virtual_screen(self):
         opened=asyncio.Event()
         stopped=asyncio.Event()

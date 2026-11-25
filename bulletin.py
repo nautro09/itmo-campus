@@ -91,6 +91,15 @@ def article(kind, text, *, cover=True):
     elif kind == "departure":
         subject, _, route = body.partition("\n")
         blocks.append(f"<h2>{literal(subject)}</h2><p>{literal(route)}</p>")
+    elif kind == "digest":
+        for section in body.strip().split("\n\n"):
+            heading, _, entries = section.partition("\n")
+            if re.fullmatch(r"(Задания|Изменения пар|Баллы БаРС|Почта|Расписание|Дорога|За неделю|Другие уведомления) · [0-9]+", heading):
+                blocks.append(f"<h2>{literal(heading)}</h2>")
+                if entries:
+                    blocks.append(f"<p>{literal(entries)}</p>")
+            elif section:
+                blocks.append(f"<p>{literal(section)}</p>")
     elif body.strip():
         for item in body.strip().split("\n\n"):
             blocks.append(f"<p>{literal(item)}</p>")

@@ -173,8 +173,8 @@ class Bot:
     def draft(self,text):
         draft=draft_task(text)
         message=(f"Черновик задания\n{draft['title']}\nКатегория · {draft['category']}\n"
-                 f"Срок · {draft['due'] or 'нужно выбрать'}\nПодзадач · {len(draft['steps'])}")
-        return self.plan.screen("draft",message,[["Сохранить черновик","Изменить срок"],["Изменить название","Изменить категорию"],[BACK]],draft=draft)
+                 f"Сдать до · {draft['due'] or 'нужно выбрать'}\nНапомнить · за час до сдачи\nПодзадач · {len(draft['steps'])}")
+        return self.plan.screen("draft",message,[["Сохранить черновик","Изменить срок"],["Настроить напоминание"],["Изменить название","Изменить категорию"],[BACK]],draft=draft)
 
     async def sign_in(self, env):
         self.monitor.signing_in = True
@@ -248,16 +248,18 @@ class Bot:
                 return self.plan.screen("draft_title","Как назвать задание?",[[BACK]],draft=d)
             if text=="Изменить категорию":
                 return self.plan.categories(data)
-            if text=="Изменить срок" or (text=="Сохранить черновик" and not d["due"]):
+            if text=="Изменить срок" or (text in ("Сохранить черновик","Настроить напоминание") and not d["due"]):
                 return self.plan.date_picker(data)
+            if text=="Настроить напоминание":
+                return self.plan.lead_picker(dict(data, day=d["due"][:10]))
             if text=="Сохранить черновик":
-                return self.plan.lead_picker(data)
+                return self.plan.handle("За час",dict(name="lead",data=data))
         if name=="draft_title" and text!=BACK:
             d=screen["draft"]
             if not 1<=len(text)<=160:
                 return "Введи название до 160 символов.",self.s.get("keyboard",MAIN)
             d["title"]=text
-            return self.plan.screen("draft",f"{text}\n{d['due'] or 'Выбери срок'}",[["Сохранить черновик","Изменить срок"],[BACK]],draft=d)
+            return self.plan.screen("draft",f"{text}\n{d['due'] or 'Выбери срок'}",[["Сохранить черновик","Изменить срок"],["Настроить напоминание"],[BACK]],draft=d)
         if text=="🚶 Дорога" and name=="settings":
             return self.plan.screen("travel","Сколько минут обычно занимает дорога до корпуса? Можно ввести число от 1 до 240.",[["20","35","50"],["По корпусам"],["Выключить напоминание"],[BACK]])
         if (name=="travel" and text=="По корпусам") or (name=="campus_time" and text==BACK):
